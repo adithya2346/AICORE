@@ -944,18 +944,28 @@ class BeautifulRecoveryApp(QMainWindow):
         header_row.addWidget(self.shield_badge)
         root_layout.addLayout(header_row)
 
-        # ── 2. MAIN TABBED INTERFACE ─────────────────────────────────────────
+        # ── 2. MAIN 3-STAGE WORKSPACE PIPELINE ──────────────────────────────
+        workspace_row = QHBoxLayout()
+        workspace_row.setSpacing(16)
+
+        # LEFT / CENTER: Interactive Stages 1 & 2
         self.tab_widget = QTabWidget()
         
-        # TAB 1: Real-time Folder Monitor & Deleted File/Photo Recovery
+        # STAGE 1: Real-time Folder Monitor (Intercepts deleted data)
         tab_sentinel = self.create_sentinel_tab()
-        self.tab_widget.addTab(tab_sentinel, "🛡️ Real-Time Folder Monitor & Auto-Recovery")
+        self.tab_widget.addTab(tab_sentinel, "Stage 1: 🛡️ Real-Time Folder Monitor")
 
-        # TAB 2: Damaged Evidence File & Sector Carving
+        # STAGE 2: Damaged Evidence File & Sector Carving (Performs corruption check & repair)
         tab_carving = self.create_carving_tab()
-        self.tab_widget.addTab(tab_carving, "🔬 Damaged File & Sector Carving")
+        self.tab_widget.addTab(tab_carving, "Stage 2: 🔬 Damaged File & Repair Engine")
 
-        root_layout.addWidget(self.tab_widget, stretch=1)
+        workspace_row.addWidget(self.tab_widget, stretch=6)
+
+        # STAGE 3: Final Data Showcase & Fragment Combining Engine (Always visible on the right!)
+        self.showcase_card = self.create_showcase_card()
+        workspace_row.addWidget(self.showcase_card, stretch=5)
+
+        root_layout.addLayout(workspace_row, stretch=1)
 
         # ── 3. COLLAPSIBLE TECHNICAL FORENSICS CONSOLE ───────────────────────
         self.log_drawer_btn = QPushButton("⚙️  Forensics Activity & Audit Trail  ▼")
@@ -977,15 +987,10 @@ class BeautifulRecoveryApp(QMainWindow):
         root_layout.addWidget(self.console_log)
 
     # ═════════════════════════════════════════════════════════════════════════
-    # TAB 1: REAL-TIME FOLDER MONITOR & DELETED FILE/PHOTO RECOVERY
+    # STAGE 1: REAL-TIME FOLDER MONITOR & DELETED FILE/PHOTO RECOVERY
     # ═════════════════════════════════════════════════════════════════════════
     def create_sentinel_tab(self) -> QWidget:
-        tab = QWidget()
-        layout = QHBoxLayout(tab)
-        layout.setContentsMargins(12, 16, 12, 12)
-        layout.setSpacing(18)
-
-        # LEFT COLUMN: Folder Configuration, Deletion Alert Card, & Files Table
+        # Stage 1 Card: Folder Configuration, Deletion Alert Card, & Files Table
         left_card = QFrame()
         left_card.setObjectName("glassCard")
         left_layout = QVBoxLayout(left_card)
@@ -1170,23 +1175,12 @@ class BeautifulRecoveryApp(QMainWindow):
         self.files_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         left_layout.addWidget(self.files_table)
 
-        layout.addWidget(left_card, stretch=6)
-
-        # RIGHT COLUMN: Live Reconstruction Showcase & Preview
-        right_card = self.create_showcase_card()
-        layout.addWidget(right_card, stretch=5)
-
-        return tab
+        return left_card
 
     # ═════════════════════════════════════════════════════════════════════════
-    # TAB 2: DAMAGED FILE & SECTOR CARVING
+    # STAGE 2: DAMAGED FILE & SECTOR CARVING REPAIR ENGINE
     # ═════════════════════════════════════════════════════════════════════════
     def create_carving_tab(self) -> QWidget:
-        tab = QWidget()
-        layout = QHBoxLayout(tab)
-        layout.setContentsMargins(12, 16, 12, 12)
-        layout.setSpacing(18)
-
         left_card = QFrame()
         left_card.setObjectName("glassCard")
         left_layout = QVBoxLayout(left_card)
@@ -1279,16 +1273,10 @@ class BeautifulRecoveryApp(QMainWindow):
         left_layout.addWidget(self.carve_progress_bar)
         left_layout.addStretch()
 
-        layout.addWidget(left_card, stretch=6)
-
-        # Shared Showcase Display
-        right_card_carving = self.create_showcase_card()
-        layout.addWidget(right_card_carving, stretch=5)
-
-        return tab
+        return left_card
 
     # ═════════════════════════════════════════════════════════════════════════
-    # SHOWCASE & METRICS CARD (Visual Preview & Verification Certificate)
+    # STAGE 3: FINAL DATA RECONSTRUCTION & COMBINING SHOWCASE CARD
     # ═════════════════════════════════════════════════════════════════════════
     def create_showcase_card(self) -> QFrame:
         card = QFrame()
@@ -1299,7 +1287,7 @@ class BeautifulRecoveryApp(QMainWindow):
 
         # Showcase Header
         res_header = QHBoxLayout()
-        res_title = QLabel("RECONSTRUCTION & PREVIEW")
+        res_title = QLabel("STAGE 3: FINAL DATA RECONSTRUCTION & COMBINING")
         res_title.setStyleSheet("color: #38bdf8; font-size: 11px; font-weight: 800; letter-spacing: 0.8px;")
         
         self.status_badge = QLabel("READY TO RECOVER")
@@ -1697,35 +1685,50 @@ class BeautifulRecoveryApp(QMainWindow):
         self.status_badge.setStyleSheet("color: #64748b; font-size: 11px; font-weight: 700;")
 
     def on_auto_recovered(self, rec_info: dict):
-        """Called when auto-recovery restores the file into the same path."""
+        """
+        AUTOMATED 3-STAGE PIPELINE:
+        Stage 1: Real-time folder monitor intercepts deleted file/data.
+        Stage 2: File/data is passed to Damaged File section for deep corruption scan, fragment assembly & repair.
+        Stage 3: Provides the final data on the right side with fragment combining animation.
+        """
         self.recovered_result = rec_info
         fn = rec_info.get("name", "")
-        dest = rec_info.get("restored_to", "")
-        
-        # Change Alert Card to green success state
+        dest = rec_info.get("restored_to", rec_info.get("path", ""))
+
+        self.console_log.append(f"[Pipeline Stage 1] Intercepted deleted file '{fn}'.")
+        self.console_log.append(f"[Pipeline Stage 1 ➔ Stage 2] Passing '{fn}' to Damaged File Section for corruption scan & neural repair...")
+
+        # Update Alert Card
         self.deletion_alert_frame.setObjectName("alertCardSuccess")
         self.deletion_alert_frame.setStyleSheet("""
             background-color: #07281d;
             border: 2px solid #10b981;
             border-radius: 14px;
         """)
-        self.alert_badge.setText("✓ SUCCESSFULLY RECOVERED TO SAME PATH!")
-        self.alert_badge.setStyleSheet("color: #34d399; font-size: 12px; font-weight: 800;")
-        self.alert_name_lbl.setText(f"✓ Restored: {fn}")
-        self.alert_path_lbl.setText(f"Path: {dest}")
+        self.alert_badge.setText("⚡ STAGE 1 ➔ STAGE 2: PASSING TO DAMAGED FILE ENGINE...")
+        self.alert_badge.setStyleSheet("color: #38bdf8; font-size: 11px; font-weight: 800;")
+        self.alert_name_lbl.setText(f"✓ Intercepted: {fn}")
+        self.alert_path_lbl.setText(f"Running automated corruption check & neural reconstruction on: {dest}")
         self.alert_recover_btn.setVisible(False)
+        self.alert_deny_btn.setVisible(False)
 
-        # Update table row to restored
+        # Update table row to Reconstructing
         for row in range(self.files_table.rowCount()):
             item = self.files_table.item(row, 1)
             if item and item.text() == fn:
                 s_item = self.files_table.item(row, 0)
                 if s_item:
-                    s_item.setText("✓ RESTORED")
-                    s_item.setForeground(QBrush(QColor("#34d399")))
+                    s_item.setText("⚡ REPAIRING...")
+                    s_item.setForeground(QBrush(QColor("#38bdf8")))
                 break
 
-        self.display_recovery_showcase(rec_info)
+        # Pass file to Stage 2: Damaged File Section & execute repair operation
+        if dest and os.path.exists(dest):
+            self.set_carve_selected_file(dest)
+            self.tab_widget.setCurrentIndex(1)  # Make Stage 2 active
+            self.start_carve_recovery()          # Run corruption scan & reconstruction operation!
+        else:
+            self.display_recovery_showcase(rec_info)
 
     def on_alert_recover_clicked(self):
         """User clicked 'Recover to Same Path' on the alert card."""
@@ -1944,8 +1947,24 @@ class BeautifulRecoveryApp(QMainWindow):
                 except Exception as ex:
                     self.console_log.append(f"[!] Could not replace original file: {ex}")
 
-        # Update showcase display
+        # Update showcase display (Stage 3)
         self.display_recovery_showcase(data)
+
+        # Update Stage 1 monitored files table & alert card
+        fn = source_path.name if source_path else data.get("name", "")
+        self.alert_badge.setText("✓ PIPELINE COMPLETED: FINAL DATA DELIVERED!")
+        self.alert_badge.setStyleSheet("color: #34d399; font-size: 11px; font-weight: 800;")
+        self.alert_name_lbl.setText(f"✓ Final Data: {fn}")
+        self.alert_path_lbl.setText(f"Reconstructed and verified in original path: {data.get('restored_to', data.get('path', ''))}")
+
+        for row in range(self.files_table.rowCount()):
+            item = self.files_table.item(row, 1)
+            if item and item.text() == fn:
+                s_item = self.files_table.item(row, 0)
+                if s_item:
+                    s_item.setText("✓ RESTORED")
+                    s_item.setForeground(QBrush(QColor("#34d399")))
+                break
 
         # 2. Pop-up notification showing that recovery was SUCCESSFUL
         raw_sr = data.get("success_rate", data.get("successRate", 0.0))
@@ -1980,11 +1999,12 @@ class BeautifulRecoveryApp(QMainWindow):
         frags_count = data.get("fragments_count", len(data.get("fragments", [])) or 1)
 
         msg_box = QMessageBox(self)
-        msg_box.setWindowTitle("🎉 Recovery Successful!")
+        msg_box.setWindowTitle("🎉 Recovery & Repair Successful!")
         msg_box.setIcon(QMessageBox.Information)
 
         info_html = (
-            "<h3><span style='color: #10b981;'>✓ File Recovery was SUCCESSFUL!</span></h3>"
+            "<h3><span style='color: #10b981;'>✓ Pipeline Completed: Final Data Delivered!</span></h3>"
+            "<p style='color: #94a3b8; font-size: 11px; margin-top: -6px;'><b>Pipeline:</b> Stage 1 (Capture) ➔ Stage 2 (Damaged File Reconstruction) ➔ Stage 3 (Final Data)</p>"
             f"<div style='background-color: #064e3b; border: 1px solid #10b981; border-radius: 8px; padding: 10px; margin-bottom: 12px;'>"
             f"<span style='color: #a7f3d0; font-size: 11px; font-weight: bold;'>OVERALL RECOVERY SUCCESS RATE</span><br>"
             f"<span style='color: #ffffff; font-size: 24px; font-weight: 900;'>{success_rate:.1f}%</span> "
