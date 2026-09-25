@@ -1,5 +1,5 @@
 import React from 'react';
-import { ShieldCheck, HardDrive, Cpu, AlertTriangle, CheckCircle2, Clock, XOctagon } from 'lucide-react';
+import { ShieldCheck, Cpu, XOctagon } from 'lucide-react';
 import { RecoveryJobStatus } from '../types/recovery';
 
 interface JobProgressViewProps {

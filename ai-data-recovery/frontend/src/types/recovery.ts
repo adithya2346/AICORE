@@ -75,3 +75,45 @@ export interface RecoveryJobStatus {
   created_at: string;
   updated_at: string;
 }
+
+export interface AIRecoveryReport {
+  originalFile: string;
+  fileType: string;
+  corruptionDetected: boolean;
+  corruptionPercentage: number;
+  exactRecoveryPercentage: number;
+  fragmentRecoveryPercentage: number;
+  aiRestorationPercentage: number;
+  aiUsed: boolean;
+  confidence: number;
+  resultType: 'exact_recovery' | 'fragment_recovery' | 'partial_recovery' | 'ai_restoration' | 'partial_ai_restoration' | 'unrecoverable';
+  status: string;
+  message: string;
+  recoveredFilePath?: string;
+  recoveredFileName?: string;
+  recoveredFileSize?: number;
+  recoveredBytes?: number;
+  reconstructedFragments?: number;
+  downloadUrl?: string;
+  previewUrl?: string;
+  aiProvider?: string;
+  disclaimer?: string;
+  successRate?: number;
+  fragmentsCount?: number;
+  authenticFragments?: number;
+  fragments?: Array<{
+    id: string;
+    offset: string;
+    size_bytes: number;
+    type: string;
+    status: string;
+    is_authentic: boolean;
+  }>;
+  aiError?: string;
+  validation?: {
+    is_valid: boolean;
+    structural_score: number;
+    decoder_success: boolean;
+  };
+}
+

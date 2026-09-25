@@ -361,6 +361,8 @@ class AutoRecoverySentinel:
                         "raw_bytes": raw,
                         "integrity": 100.0,
                         "confidence": 100,
+                        "success_rate": 100.0,
+                        "exact_pct": 100.0,
                         "is_valid": True,
                         "restored_to": str(target_dest),
                         "source": "Forensic Vault (Instant Auto-Restore)",
@@ -407,6 +409,8 @@ def recover_target_file(filename: str, directory: str) -> Optional[Dict[str, Any
             "raw_bytes": raw,
             "integrity": 100.0,
             "confidence": 100,
+            "success_rate": 100.0,
+            "exact_pct": 100.0,
             "is_valid": True,
             "restored_to": str(existing_path),
             "source": "Active Directory (Existing File)",
@@ -421,6 +425,8 @@ def recover_target_file(filename: str, directory: str) -> Optional[Dict[str, Any
         if res:
             res["source"] = "Windows Recycle Bin Forensic Recovery"
             res["timestamp"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            res["success_rate"] = 100.0
+            res["exact_pct"] = 100.0
             return res
 
     # 2. Search Vault
@@ -444,6 +450,8 @@ def recover_target_file(filename: str, directory: str) -> Optional[Dict[str, Any
                 "raw_bytes": raw,
                 "integrity": 100.0,
                 "confidence": 100,
+                "success_rate": 100.0,
+                "exact_pct": 100.0,
                 "is_valid": True,
                 "restored_to": str(target_path),
                 "source": "Forensic Vault Recovery",

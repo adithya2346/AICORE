@@ -10,6 +10,7 @@ from backend.database.database import engine, Base
 from backend.api.recovery import router as recovery_router
 from backend.api.status import router as status_router
 from backend.api.results import router as results_router
+from backend.api.ai_recovery_router import router as ai_recovery_router
 
 # Create database tables if they do not exist
 Base.metadata.create_all(bind=engine)
@@ -33,6 +34,7 @@ app.add_middleware(
 app.include_router(recovery_router)
 app.include_router(status_router)
 app.include_router(results_router)
+app.include_router(ai_recovery_router)
 
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse

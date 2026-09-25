@@ -1,5 +1,5 @@
 import React from 'react';
-import { Download, FileCheck2, AlertCircle, Sparkles, CheckCircle2, ShieldAlert } from 'lucide-react';
+import { Download, FileCheck2, AlertCircle, ShieldAlert } from 'lucide-react';
 import { RecoveredFileInfo } from '../types/recovery';
 
 interface EvidenceAuditReportProps {

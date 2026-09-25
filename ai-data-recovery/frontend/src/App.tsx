@@ -1,13 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { Shield, RefreshCw, Layers, Database, FileTerminal, Cpu } from 'lucide-react';
+import { Shield, Layers, Sparkles } from 'lucide-react';
 import { RecoveryWizard } from './components/RecoveryWizard';
 import { JobProgressView } from './components/JobProgressView';
 import { EvidenceAuditReport } from './components/EvidenceAuditReport';
 import { FragmentGraphView } from './components/FragmentGraphView';
 import { CandidateSequenceTable } from './components/CandidateSequenceTable';
+import { AIRecoveryResultView } from './components/AIRecoveryResultView';
 import { RecoveryJobStatus, RecoveredFileInfo, FragmentInfo, RelationshipInfo, CandidateInfo } from './types/recovery';
 
 export const App: React.FC = () => {
+  const [activeTab, setActiveTab] = useState<'ai_image' | 'disk_carving'>('ai_image');
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [jobStatus, setJobStatus] = useState<RecoveryJobStatus | null>(null);
   const [recoveries, setRecoveries] = useState<RecoveredFileInfo[]>([]);
@@ -136,27 +138,60 @@ export const App: React.FC = () => {
 
       {/* Main Content */}
       <main className="flex-1 max-w-7xl w-full mx-auto p-6 space-y-6">
-        {/* New Job Setup */}
-        <RecoveryWizard onJobStarted={(id) => setActiveJobId(id)} />
+        {/* Navigation Tabs */}
+        <div className="flex items-center gap-2 border-b border-slate-800 pb-3">
+          <button
+            onClick={() => setActiveTab('ai_image')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition ${
+              activeTab === 'ai_image'
+                ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-900/30'
+                : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
+            }`}
+          >
+            <Sparkles className="w-4 h-4" />
+            AI-Assisted Image Recovery
+          </button>
 
-        {/* Active Job Progress View */}
-        {jobStatus && (
-          <JobProgressView status={jobStatus} onCancel={handleCancel} />
-        )}
+          <button
+            onClick={() => setActiveTab('disk_carving')}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold transition ${
+              activeTab === 'disk_carving'
+                ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/30'
+                : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-800'
+            }`}
+          >
+            <Layers className="w-4 h-4" />
+            Forensic Disk & Evidence Carving
+          </button>
+        </div>
 
-        {/* Fragment Graph and Topology */}
-        {fragments.length > 0 && (
-          <FragmentGraphView fragments={fragments} relationships={relationships} />
-        )}
+        {activeTab === 'ai_image' ? (
+          <AIRecoveryResultView />
+        ) : (
+          <>
+            {/* New Job Setup */}
+            <RecoveryWizard onJobStarted={(id) => setActiveJobId(id)} />
 
-        {/* Alternative Candidate Sequence Table */}
-        {candidates.length > 0 && (
-          <CandidateSequenceTable candidates={candidates} />
-        )}
+            {/* Active Job Progress View */}
+            {jobStatus && (
+              <JobProgressView status={jobStatus} onCancel={handleCancel} />
+            )}
 
-        {/* Reconstructed Evidence Audit Report */}
-        {activeJobId && (
-          <EvidenceAuditReport jobId={activeJobId} recoveries={recoveries} />
+            {/* Fragment Graph and Topology */}
+            {fragments.length > 0 && (
+              <FragmentGraphView fragments={fragments} relationships={relationships} />
+            )}
+
+            {/* Alternative Candidate Sequence Table */}
+            {candidates.length > 0 && (
+              <CandidateSequenceTable candidates={candidates} />
+            )}
+
+            {/* Reconstructed Evidence Audit Report */}
+            {activeJobId && (
+              <EvidenceAuditReport jobId={activeJobId} recoveries={recoveries} />
+            )}
+          </>
         )}
       </main>
 
