@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+
+# Testing & Cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Local databases, logs & runtime workspaces
+*.db
+*.sqlite3
+*.log
+recovery_workspace/
+ai-data-recovery/recovery_workspace/
+
+# Node / Frontend
+node_modules/
+ai-data-recovery/frontend/node_modules/
+dist/
+build/
+.vite/
+.vite-temp/
+
+# OS files
+.DS_Store
+Thumbs.db

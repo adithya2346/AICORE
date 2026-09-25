@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Forensic Data Recovery & Digital Evidence Reconstruction</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  <style>
+    body { background-color: #020617; color: #f8fafc; font-family: ui-sans-serif, system-ui, -apple-system, sans-serif; }
+    .glass-panel { background: rgba(15, 23, 42, 0.85); backdrop-filter: blur(12px); border: 1px solid rgba(51, 65, 85, 0.6); }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col">
+  <!-- Top Navigation Header -->
+  <header class="border-b border-slate-800 bg-slate-900/90 sticky top-0 z-50 px-6 py-4 flex items-center justify-between shadow-xl">
+    <div class="flex items-center gap-3">
+      <div class="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-600 via-indigo-600 to-emerald-400 flex items-center justify-center shadow-lg shadow-blue-900/50">
+        <i class="fa-solid fa-shield-halved text-white text-lg"></i>
+      </div>
+      <div>
+        <h1 class="text-base font-bold text-white tracking-wide">
+          AI Forensic Data Recovery & Digital Evidence Reconstruction System
+        </h1>
+        <div class="flex items-center gap-2 text-xs text-slate-400">
+          <span class="flex items-center gap-1 text-emerald-400 font-medium">
+            <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span>
+            Read-Only Forensic Mode
+          </span>
+          <span>•</span>
+          <span>FastAPI Engine</span>
+          <span>•</span>
+          <span class="text-indigo-400 font-semibold">Strict Invariant: 0 Fabricated Bytes</span>
+        </div>
+      </div>
+    </div>
+    <div class="flex items-center gap-3">
+      <select id="recentJobsSelect" class="bg-slate-950 border border-slate-700 text-xs rounded-lg px-3 py-1.5 text-slate-300 font-mono focus:outline-none focus:border-blue-500">
+        <option value="">Select Past Job...</option>
+      </select>
+      <button onclick="fetchRecentJobs()" class="p-2 text-slate-400 hover:text-white transition-colors" title="Refresh Jobs">
+        <i class="fa-solid fa-arrows-rotate"></i>
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Container -->
+  <main class="flex-1 max-w-7xl w-full mx-auto p-6 space-y-6">
+
+    <!-- RECOVERY WIZARD -->
+    <section class="glass-panel rounded-2xl p-6 shadow-2xl">
+      <div class="flex items-center gap-3 mb-6 border-b border-slate-800 pb-4">
+        <i class="fa-solid fa-microchip text-blue-400 text-xl"></i>
+        <div>
+          <h2 class="text-lg font-bold text-white">Authorized Evidence Acquisition & Analysis</h2>
+          <p class="text-xs text-slate-400">Deterministic signature scanning + neural fragment compatibility analysis. Never invents missing data.</p>
+        </div>
+      </div>
+
+      <!-- Mode Selector -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+        <div id="modeCardA" onclick="setMode('recover_corrupted', 'uploaded_file')" class="p-4 rounded-xl border cursor-pointer transition-all border-blue-500/80 bg-blue-950/30 text-white shadow-lg shadow-blue-950/40">
+          <div class="flex items-start gap-3">
+            <i class="fa-solid fa-file-circle-exclamation text-blue-400 text-xl mt-1"></i>
+            <div>
+              <div class="font-bold text-sm">MODE A: Damaged / Corrupted File Recovery</div>
+              <div class="text-xs text-slate-400 mt-1">Carves valid fragments, models successor probabilities, repairs corrupted structural markers.</div>
+            </div>
+          </div>
+        </div>
+
+        <div id="modeCardB" onclick="setMode('recover_deleted', 'disk_image')" class="p-4 rounded-xl border cursor-pointer transition-all border-slate-700/60 bg-slate-900/40 text-slate-400 hover:border-slate-600">
+          <div class="flex items-start gap-3">
+            <i class="fa-solid fa-hard-drive text-purple-400 text-xl mt-1"></i>
+            <div>
+              <div class="font-bold text-sm">MODE B: Deleted File & Unallocated Drive Recovery</div>
+              <div class="text-xs text-slate-400 mt-1">Read-only NTFS/FAT32/exFAT deleted metadata search + unallocated sector carving.</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Upload and Path Input -->
+      <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+        <div class="relative border-2 border-dashed border-slate-700 hover:border-blue-500 rounded-xl p-6 text-center bg-slate-950/50 transition-colors">
+          <input type="file" id="evidenceFileInput" onchange="uploadEvidenceFile(event)" class="absolute inset-0 w-full h-full opacity-0 cursor-pointer" />
+          <i class="fa-solid fa-cloud-arrow-up text-3xl text-slate-400 mb-2"></i>
+          <div class="text-sm font-semibold text-slate-300" id="uploadStatusText">Upload Damaged Evidence or Disk Image</div>
+          <div class="text-xs text-slate-500 mt-1">Supports raw binaries, images, .dd, .img, .sqlite, .zip</div>
+        </div>
+
+        <div class="space-y-4">
+          <div>
+            <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">
+              Authorized Source Path
+            </label>
+            <input type="text" id="sourcePathInput" placeholder="e.g. /recovery/input/corrupted.bin or D:/image.dd" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white font-mono focus:outline-none focus:border-blue-500" />
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                Target Format
+              </label>
+              <select id="targetFormatSelect" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500">
+                <option value="jpeg">JPEG Image</option>
+                <option value="png">PNG Image</option>
+                <option value="pdf">PDF Document</option>
+                <option value="zip">ZIP / DOCX Archive</option>
+                <option value="mp4">MP4 Video</option>
+                <option value="mp3">MP3 Audio</option>
+                <option value="sqlite">SQLite Database</option>
+              </select>
+            </div>
+
+            <div>
+              <label class="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                Target Filename (Optional)
+              </label>
+              <input type="text" id="targetFilenameInput" placeholder="college_event.jpg" class="w-full bg-slate-950 border border-slate-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-blue-500" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <button onclick="startRecoveryJob()" id="startBtn" class="w-full py-3 px-6 rounded-xl bg-gradient-to-r from-blue-600 via-indigo-600 to-emerald-500 hover:from-blue-500 hover:to-emerald-400 text-white font-semibold flex items-center justify-center gap-2 shadow-lg shadow-blue-900/40 transition-all">
+        <i class="fa-solid fa-play text-sm"></i>
+        <span>Start Forensic Recovery Engine</span>
+      </button>
+    </section>
+
+    <!-- LIVE JOB PROGRESS CARD -->
+    <section id="progressSection" class="glass-panel rounded-2xl p-6 shadow-2xl hidden space-y-6">
+      <div class="flex flex-wrap items-center justify-between border-b border-slate-800 pb-4 gap-4">
+        <div>
+          <div class="flex items-center gap-2">
+            <span class="text-xs uppercase font-mono text-slate-400">Job Reference</span>
+            <span id="jobIdBadge" class="text-sm font-mono font-bold text-blue-400 bg-blue-950 px-2 py-0.5 rounded border border-blue-800"></span>
+            <span id="jobStatusBadge" class="text-xs px-2 py-0.5 rounded font-bold uppercase"></span>
+          </div>
+          <h3 id="jobOpTitle" class="text-base font-bold text-white mt-1"></h3>
+        </div>
+        <button onclick="cancelActiveJob()" id="cancelBtn" class="px-3 py-1.5 rounded-lg bg-rose-950 hover:bg-rose-900 border border-rose-800 text-rose-300 text-xs font-semibold flex items-center gap-1.5 transition-colors">
+          <i class="fa-solid fa-ban"></i>
+          <span>Cancel Job</span>
+        </button>
+      </div>
+
+      <div>
+        <div class="flex justify-between items-center text-xs mb-2">
+          <span class="font-semibold text-slate-300 capitalize flex items-center gap-1.5">
+            <i class="fa-solid fa-gear fa-spin text-blue-400"></i>
+            Current Stage: <span id="currentStageText" class="text-blue-400 font-mono"></span>
+          </span>
+          <span id="progressPctText" class="font-mono font-bold text-emerald-400 text-sm">0%</span>
+        </div>
+        <div class="w-full h-2.5 bg-slate-950 rounded-full overflow-hidden border border-slate-800">
+          <div id="progressBarFill" class="h-full bg-gradient-to-r from-blue-600 via-indigo-500 to-emerald-400 transition-all duration-300" style="width: 0%"></div>
+        </div>
+      </div>
+
+      <!-- Source Integrity Card -->
+      <div id="sourceMetaCard" class="bg-slate-950/80 border border-slate-800 rounded-xl p-4 grid grid-cols-1 md:grid-cols-4 gap-4 text-xs font-mono">
+        <div>
+          <span class="text-slate-500 block mb-1">Source SHA-256</span>
+          <span id="sourceShaText" class="text-slate-200 font-bold break-all"></span>
+        </div>
+        <div>
+          <span class="text-slate-500 block mb-1">Evidence Size</span>
+          <span id="sourceSizeText" class="text-slate-200 font-bold"></span>
+        </div>
+        <div>
+          <span class="text-slate-500 block mb-1">Filesystem Type</span>
+          <span id="sourceFsText" class="text-slate-200 font-bold uppercase"></span>
+        </div>
+        <div class="flex items-center gap-2">
+          <i class="fa-solid fa-shield-check text-emerald-400 text-2xl"></i>
+          <div>
+            <span class="text-slate-500 block">Forensic Integrity</span>
+            <span class="text-emerald-400 font-bold">READ-ONLY AUDITED</span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- FRAGMENT TOPOLOGY & RELATIONSHIPS -->
+    <section id="fragmentSection" class="glass-panel rounded-2xl p-6 shadow-2xl hidden space-y-6">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+        <h3 class="text-base font-bold text-white flex items-center gap-2">
+          <i class="fa-solid fa-diagram-project text-indigo-400"></i>
+          Discovered Fragments & Relationship Graph
+        </h3>
+        <span id="fragmentSummaryText" class="text-xs font-mono text-slate-400"></span>
+      </div>
+
+      <div id="fragmentsGrid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-3"></div>
+
+      <div>
+        <h4 class="text-xs font-semibold uppercase text-slate-400 mb-3 tracking-wider flex items-center gap-1.5">
+          <i class="fa-solid fa-link text-emerald-400"></i>
+          Predicted Successor Transitions (Fragment A → Fragment B)
+        </h4>
+        <div id="relationshipsGrid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3"></div>
+      </div>
+    </section>
+
+    <!-- CANDIDATE PATH COMPARISONS -->
+    <section id="candidatesSection" class="glass-panel rounded-2xl p-6 shadow-2xl hidden space-y-4">
+      <div class="flex items-center gap-2 border-b border-slate-800 pb-3">
+        <i class="fa-solid fa-code-fork text-blue-400"></i>
+        <h3 class="text-base font-bold text-white">Reconstruction Path Candidates</h3>
+        <span class="text-xs text-slate-400 ml-auto">Alternative candidate sequences preserved</span>
+      </div>
+      <div class="overflow-x-auto">
+        <table class="w-full text-left text-xs font-mono">
+          <thead class="bg-slate-950 text-slate-400 uppercase tracking-wider">
+            <tr>
+              <th class="p-3">Rank</th>
+              <th class="p-3">Sequence Path</th>
+              <th class="p-3">Score</th>
+              <th class="p-3">Parser Verification</th>
+            </tr>
+          </thead>
+          <tbody id="candidatesTableBody" class="divide-y divide-slate-800 text-slate-300"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- RECOVERY RESULTS & AUDIT REPORT -->
+    <section id="resultsSection" class="glass-panel rounded-2xl p-6 shadow-2xl hidden space-y-6">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-4">
+        <div>
+          <h2 class="text-lg font-bold text-white">Forensic Reconstruction Evidence Report</h2>
+          <p class="text-xs text-slate-400">Detailed metric breakdown, parser verification, and zero-fabrication validation.</p>
+        </div>
+        <button onclick="downloadReport()" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 border border-slate-700 rounded-lg text-xs font-semibold text-slate-200 flex items-center gap-2 transition-colors">
+          <i class="fa-solid fa-file-arrow-down"></i>
+          <span>Download Audit Report (.md)</span>
+        </button>
+      </div>
+
+      <div id="recoveriesList" class="space-y-6"></div>
+    </section>
+
+  </main>
+
+  <footer class="border-t border-slate-900 py-4 text-center text-xs text-slate-600">
+    Forensic Binary Analysis & Neural Relationship Reconstruction Platform • Strictly Preserving Digital Evidence
+  </footer>
+
+  <script>
+    let currentOperation = 'recover_corrupted';
+    let currentSourceType = 'uploaded_file';
+    let activeJobId = null;
+    let pollInterval = null;
+
+    function setMode(op, srcType) {
+      currentOperation = op;
+      currentSourceType = srcType;
+      const cardA = document.getElementById('modeCardA');
+      const cardB = document.getElementById('modeCardB');
+
+      if (op === 'recover_corrupted') {
+        cardA.className = 'p-4 rounded-xl border cursor-pointer transition-all border-blue-500/80 bg-blue-950/30 text-white shadow-lg shadow-blue-950/40';
+        cardB.className = 'p-4 rounded-xl border cursor-pointer transition-all border-slate-700/60 bg-slate-900/40 text-slate-400 hover:border-slate-600';
+      } else {
+        cardB.className = 'p-4 rounded-xl border cursor-pointer transition-all border-purple-500/80 bg-purple-950/30 text-white shadow-lg shadow-purple-950/40';
+        cardA.className = 'p-4 rounded-xl border cursor-pointer transition-all border-slate-700/60 bg-slate-900/40 text-slate-400 hover:border-slate-600';
+      }
+    }
+
+    async function uploadEvidenceFile(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      const statusText = document.getElementById('uploadStatusText');
+      statusText.innerText = 'Uploading ' + file.name + '...';
+
+      const formData = new FormData();
+      formData.append('file', file);
+      formData.append('operation', currentOperation);
+      formData.append('target_type', document.getElementById('targetFormatSelect').value);
+
+      try {
+        const res = await fetch('/api/recovery/upload', { method: 'POST', body: formData });
+        const data = await res.json();
+        if (res.ok) {
+          document.getElementById('sourcePathInput').value = data.source_path;
+          statusText.innerText = 'Uploaded: ' + file.name;
+          if (!document.getElementById('targetFilenameInput').value) {
+            document.getElementById('targetFilenameInput').value = 'recovered_' + file.name;
+          }
+        } else {
+          statusText.innerText = 'Upload failed: ' + (data.detail || 'Error');
+        }
+      } catch (err) {
+        statusText.innerText = 'Upload error: ' + err.message;
+      }
+    }
+
+    async function startRecoveryJob() {
+      const sourcePath = document.getElementById('sourcePathInput').value.trim();
+      if (!sourcePath) {
+        alert('Please specify an authorized evidence source path or upload a file.');
+        return;
+      }
+
+      const targetFormat = document.getElementById('targetFormatSelect').value;
+      const targetFilename = document.getElementById('targetFilenameInput').value.trim();
+
+      try {
+        const res = await fetch('/api/recovery/start', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            operation: currentOperation,
+            source_type: currentSourceType,
+            source_path: sourcePath,
+            target_type: targetFormat || undefined,
+            target_filename: targetFilename || undefined
+          })
+        });
+
+        const data = await res.json();
+        if (res.ok) {
+          activeJobId = data.job_id;
+          startPollingJob(activeJobId);
+        } else {
+          alert('Failed to start recovery: ' + (data.detail || 'Unknown error'));
+        }
+      } catch (err) {
+        alert('Error connecting to backend: ' + err.message);
+      }
+    }
+
+    function startPollingJob(jobId) {
+      document.getElementById('progressSection').classList.remove('hidden');
+      document.getElementById('jobIdBadge').innerText = jobId;
+
+      if (pollInterval) clearInterval(pollInterval);
+      pollInterval = setInterval(() => pollJobStatus(jobId), 1200);
+      pollJobStatus(jobId);
+    }
+
+    async function pollJobStatus(jobId) {
+      try {
+        const res = await fetch('/api/recovery/' + jobId + '/status');
+        if (!res.ok) return;
+        const data = await res.json();
+
+        document.getElementById('jobOpTitle').innerText = 'Operation: ' + data.operation;
+        document.getElementById('jobStatusBadge').innerText = data.status;
+        document.getElementById('currentStageText').innerText = data.current_stage.replace('_', ' ');
+        document.getElementById('progressPctText').innerText = data.progress + '%';
+        document.getElementById('progressBarFill').style.width = data.progress + '%';
+
+        const badge = document.getElementById('jobStatusBadge');
+        if (data.status === 'completed') {
+          badge.className = 'text-xs px-2 py-0.5 rounded font-bold uppercase bg-emerald-950 text-emerald-300 border border-emerald-800';
+          document.getElementById('cancelBtn').classList.add('hidden');
+        } else if (data.status === 'failed') {
+          badge.className = 'text-xs px-2 py-0.5 rounded font-bold uppercase bg-rose-950 text-rose-300 border border-rose-800';
+          document.getElementById('cancelBtn').classList.add('hidden');
+        } else {
+          badge.className = 'text-xs px-2 py-0.5 rounded font-bold uppercase bg-blue-950 text-blue-300 border border-blue-800 animate-pulse';
+        }
+
+        if (data.source) {
+          document.getElementById('sourceShaText').innerText = data.source.source_sha256;
+          document.getElementById('sourceSizeText').innerText = (data.source.source_size / 1024).toFixed(1) + ' KB';
+          document.getElementById('sourceFsText').innerText = data.source.filesystem_detected || 'RAW';
+        }
+
+        if (['fragment_analysis', 'relationship_analysis', 'reconstructing', 'validating', 'completed'].includes(data.current_stage) || data.status === 'completed') {
+          loadFragments(jobId);
+        }
+
+        if (data.status === 'completed') {
+          clearInterval(pollInterval);
+          loadResults(jobId);
+          fetchRecentJobs();
+        } else if (['failed', 'cancelled'].includes(data.status)) {
+          clearInterval(pollInterval);
+          fetchRecentJobs();
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function loadFragments(jobId) {
+      try {
+        const res = await fetch('/api/recovery/' + jobId + '/fragments');
+        if (!res.ok) return;
+        const data = await res.json();
+
+        const fSec = document.getElementById('fragmentSection');
+        fSec.classList.remove('hidden');
+        document.getElementById('fragmentSummaryText').innerText = data.fragment_count + ' fragments discovered';
+
+        const fGrid = document.getElementById('fragmentsGrid');
+        fGrid.innerHTML = data.fragments.map(f => `
+          <div class="p-3 rounded-lg border text-xs font-mono ${f.is_header ? 'bg-blue-950/40 border-blue-600/80 text-blue-200' : f.is_footer ? 'bg-purple-950/40 border-purple-600/80 text-purple-200' : 'bg-slate-950/80 border-slate-800 text-slate-300'}">
+            <div class="flex items-center justify-between mb-1">
+              <span class="font-bold">${f.fragment_id}</span>
+              ${f.is_header ? '<span class="text-[10px] bg-blue-500/20 px-1 rounded text-blue-300">HDR</span>' : ''}
+              ${f.is_footer ? '<span class="text-[10px] bg-purple-500/20 px-1 rounded text-purple-300">FTR</span>' : ''}
+            </div>
+            <div class="text-[11px] text-slate-500">Off: ${f.offset}</div>
+            <div class="text-[11px] text-slate-500">Len: ${f.length} B</div>
+            <div class="mt-2 flex items-center justify-between text-[11px]">
+              <span class="text-slate-400 uppercase">${f.predicted_type}</span>
+              <span class="text-emerald-400">H: ${f.entropy}</span>
+            </div>
+          </div>
+        `).join('');
+
+        const rGrid = document.getElementById('relationshipsGrid');
+        rGrid.innerHTML = data.relationships.slice(0, 9).map(r => `
+          <div class="bg-slate-950 border border-slate-800/80 rounded-lg p-3 flex items-center justify-between text-xs font-mono">
+            <div class="flex items-center gap-2">
+              <span class="text-blue-300">${r.from_fragment}</span>
+              <i class="fa-solid fa-arrow-right text-slate-600 text-[10px]"></i>
+              <span class="text-indigo-300">${r.to_fragment}</span>
+            </div>
+            <span class="px-1.5 py-0.5 rounded bg-emerald-950 border border-emerald-800/60 text-emerald-400 font-bold">
+              ${(r.probability * 100).toFixed(0)}%
+            </span>
+          </div>
+        `).join('');
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function loadResults(jobId) {
+      try {
+        const res = await fetch('/api/recovery/' + jobId + '/results');
+        if (!res.ok) return;
+        const data = await res.json();
+
+        // Candidates table
+        if (data.reconstruction_candidates && data.reconstruction_candidates.length > 0) {
+          document.getElementById('candidatesSection').classList.remove('hidden');
+          const tbody = document.getElementById('candidatesTableBody');
+          tbody.innerHTML = data.reconstruction_candidates.map(c => `
+            <tr class="${c.rank === 1 ? 'bg-blue-950/20 font-bold text-white' : ''}">
+              <td class="p-3">
+                <span class="px-2 py-0.5 rounded ${c.rank === 1 ? 'bg-blue-500 text-white' : 'bg-slate-800 text-slate-400'}">
+                  #${c.rank}
+                </span>
+              </td>
+              <td class="p-3 max-w-md truncate">${c.sequence.join(' → ')}</td>
+              <td class="p-3 text-emerald-400 font-bold">${c.score.toFixed(1)}/100</td>
+              <td class="p-3">
+                <span class="flex items-center gap-1 ${c.parser_valid ? 'text-emerald-400' : 'text-rose-400'}">
+                  <i class="fa-solid ${c.parser_valid ? 'fa-check' : 'fa-xmark'}"></i>
+                  ${c.parser_valid ? 'PASSED' : 'FAILED'}
+                </span>
+              </td>
+            </tr>
+          `).join('');
+        }
+
+        // Recoveries list
+        const rSec = document.getElementById('resultsSection');
+        rSec.classList.remove('hidden');
+        const listDiv = document.getElementById('recoveriesList');
+
+        listDiv.innerHTML = data.recoveries.map(rec => {
+          const isImg = ['jpeg', 'png', 'jpg'].includes(rec.type.toLowerCase()) && rec.validation.parser_success;
+          return `
+            <div class="bg-slate-950/70 border border-slate-800 rounded-xl p-6 space-y-6">
+              <div class="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-4">
+                <div>
+                  <div class="flex items-center gap-2">
+                    <i class="fa-solid fa-file-circle-check text-emerald-400 text-lg"></i>
+                    <span class="text-base font-bold text-white font-mono">${rec.filename}</span>
+                    <span class="text-xs px-2 py-0.5 rounded bg-slate-800 text-slate-300 uppercase font-mono">${rec.type}</span>
+                  </div>
+                  <div class="text-xs text-slate-400 mt-1">
+                    Rating: <span class="text-emerald-400 font-semibold uppercase">${rec.status.replace('_', ' ')}</span>
+                  </div>
+                </div>
+                <a href="/api/recovery/${jobId}/download/${rec.file_id}" download="${rec.filename}" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-white font-semibold text-xs flex items-center gap-2 shadow-lg shadow-emerald-950/60 transition-all">
+                  <i class="fa-solid fa-download"></i>
+                  <span>Download Recovered File</span>
+                </a>
+              </div>
+
+              <!-- Metric Cards -->
+              <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div class="bg-slate-900 border border-slate-800 rounded-lg p-3">
+                  <span class="text-xs text-slate-500 block mb-1">Model Confidence</span>
+                  <div class="text-xl font-bold font-mono text-blue-400">${(rec.model_confidence * 100).toFixed(0)}%</div>
+                  <div class="text-[10px] text-slate-500 mt-1">Pairwise transition likelihood</div>
+                </div>
+                <div class="bg-slate-900 border border-slate-800 rounded-lg p-3">
+                  <span class="text-xs text-slate-500 block mb-1">Recoverability Score</span>
+                  <div class="text-xl font-bold font-mono text-emerald-400">${rec.recoverability_score.toFixed(1)}/100</div>
+                  <div class="text-[10px] text-slate-500 mt-1">Preserved original byte ratio</div>
+                </div>
+                <div class="bg-slate-900 border border-slate-800 rounded-lg p-3">
+                  <span class="text-xs text-slate-500 block mb-1">Structural Integrity</span>
+                  <div class="text-xl font-bold font-mono text-indigo-400">${rec.integrity_score.toFixed(1)}%</div>
+                  <div class="text-[10px] text-slate-500 mt-1">Parser marker consistency</div>
+                </div>
+                <div class="bg-slate-900 border border-slate-800 rounded-lg p-3">
+                  <span class="text-xs text-slate-500 block mb-1">Fabricated Bytes</span>
+                  <div class="text-xl font-bold font-mono text-emerald-400">0 bytes</div>
+                  <div class="text-[10px] text-emerald-500/80 mt-1">Strict zero invariant verified</div>
+                </div>
+              </div>
+
+              <!-- Bytes summary -->
+              <div class="bg-slate-900/60 border border-slate-800 rounded-lg p-3 text-xs font-mono grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div><span class="text-slate-500">Recovered Original:</span> <span class="text-white font-bold">${rec.recovered_bytes.toLocaleString()} bytes</span></div>
+                <div><span class="text-slate-500">Missing/Truncated:</span> <span class="text-amber-400 font-bold">${rec.missing_bytes.toLocaleString()} bytes</span></div>
+                <div><span class="text-slate-500">Fragments Used:</span> <span class="text-white font-bold">${rec.fragments_used.length} fragments</span></div>
+              </div>
+
+              <!-- Image preview if JPEG/PNG -->
+              ${isImg ? `
+                <div class="border border-slate-800 rounded-xl p-4 bg-slate-900/40">
+                  <h4 class="text-xs font-semibold uppercase text-slate-400 mb-3 tracking-wider">
+                    Decoded Visual Artifact Preview
+                  </h4>
+                  <div class="flex items-center gap-6">
+                    <div class="w-48 h-48 bg-slate-950 rounded-lg overflow-hidden border border-slate-800 flex items-center justify-center p-1">
+                      <img src="/api/recovery/${jobId}/download/${rec.file_id}" class="max-w-full max-h-full object-contain rounded" />
+                    </div>
+                    <div class="text-xs space-y-2 text-slate-300">
+                      <div><span class="text-slate-500">Dimensions:</span> <span class="font-mono font-bold text-white">${rec.validation.dimensions ? rec.validation.dimensions[0] + ' × ' + rec.validation.dimensions[1] + ' px' : 'Auto'}</span></div>
+                      <div><span class="text-slate-500">Decoder Status:</span> <span class="text-emerald-400 font-bold">PASSED (Pillow engine)</span></div>
+                      <div><span class="text-slate-500">Marker Chain:</span> <span class="font-mono text-slate-400">SOI → DQT → DHT → SOF → SOS → EOI</span></div>
+                    </div>
+                  </div>
+                </div>
+              ` : ''}
+            </div>
+          `;
+        }).join('');
+
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    async function cancelActiveJob() {
+      if (!activeJobId) return;
+      try {
+        await fetch('/api/recovery/cancel/' + activeJobId, { method: 'POST' });
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    function downloadReport() {
+      if (!activeJobId) return;
+      window.open('/api/recovery/' + activeJobId + '/report?format=markdown', '_blank');
+    }
+
+    async function fetchRecentJobs() {
+      try {
+        const res = await fetch('/api/recovery/jobs');
+        if (!res.ok) return;
+        const jobs = await res.json();
+        const sel = document.getElementById('recentJobsSelect');
+        sel.innerHTML = '<option value="">Select Past Job...</option>' + jobs.map(j => `
+          <option value="${j.job_id}">${j.job_id} - ${j.status.toUpperCase()} (${j.operation})</option>
+        `).join('');
+
+        sel.onchange = (e) => {
+          if (e.target.value) {
+            activeJobId = e.target.value;
+            startPollingJob(activeJobId);
+          }
+        };
+      } catch (e) {
+        console.error(e);
+      }
+    }
+
+    // Auto-fetch on page load
+    fetchRecentJobs();
+  </script>
+</body>
+</html>

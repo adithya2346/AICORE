@@ -1,0 +1,18 @@
+version: '3.8'
+
+services:
+  recovery-backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ai_data_recovery_engine
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./recovery_workspace:/app/recovery_workspace
+      - ./datasets:/app/datasets
+      - ./models:/app/models
+    environment:
+      - DATABASE_URL=sqlite:////app/recovery.db
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped
