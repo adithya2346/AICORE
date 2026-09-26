@@ -1683,7 +1683,7 @@ class BeautifulRecoveryApp(QMainWindow):
         left_layout.addWidget(self.format_combo)
 
         # Option to replace corrupted file directly
-        self.replace_corrupted_chk = QCheckBox("🔄 Replace corrupted file with recovered file (creates .bak backup)")
+        self.replace_corrupted_chk = QCheckBox("🔄 Replace corrupted file directly with recovered file (Single original file)")
         self.replace_corrupted_chk.setChecked(True)
         self.replace_corrupted_chk.setStyleSheet("color: #34d399; font-weight: 700; font-size: 12px; margin: 4px 0;")
         left_layout.addWidget(self.replace_corrupted_chk)
@@ -2392,7 +2392,6 @@ class BeautifulRecoveryApp(QMainWindow):
         source_path = Path(self.selected_path) if self.selected_path else None
         recovered_path = Path(data.get("path", ""))
         replaced = False
-        backup_str = ""
 
         # Ensure the filename is ALWAYS the actual original filename
         actual_name = source_path.name if (source_path and source_path.name) else data.get("name", "")
@@ -2403,19 +2402,28 @@ class BeautifulRecoveryApp(QMainWindow):
             should_replace = getattr(self, "replace_corrupted_chk", None) and self.replace_corrupted_chk.isChecked()
             if should_replace and source_path.resolve() != recovered_path.resolve():
                 try:
-                    # Save a safe backup copy (.corrupted.bak)
-                    backup_name = f"{source_path.stem}_corrupted_backup{source_path.suffix}"
-                    backup_path = source_path.with_name(backup_name)
-                    shutil.copy2(source_path, backup_path)
-                    
-                    # Overwrite original corrupted file with recovered file
+                    # Clean up any leftover corrupted_backup file so strictly only one file exists
+                    old_backup_name = f"{source_path.stem}_corrupted_backup{source_path.suffix}"
+                    old_backup_path = source_path.with_name(old_backup_name)
+                    if old_backup_path.exists() and old_backup_path.is_file():
+                        try:
+                            old_backup_path.unlink()
+                        except Exception:
+                            pass
+
+                    # Overwrite original corrupted file directly with recovered file (strictly one original file)
                     shutil.copy2(recovered_path, source_path)
                     replaced = True
-                    backup_str = backup_path.name
                     data["restored_to"] = str(source_path.resolve())
                     data["path"] = str(source_path.resolve())
-                    self.console_log.append(f"[✓ REPLACED] Corrupted file '{source_path.name}' replaced with recovered file!")
-                    self.console_log.append(f"[*] Safety backup saved as: {backup_path.name}")
+                    self.console_log.append(f"[✓ RESTORED] '{source_path.name}' restored as single original file!")
+
+                    # Remove intermediate output copy so only the single original file is retained
+                    try:
+                        if recovered_path.exists() and recovered_path.is_file() and recovered_path.resolve() != source_path.resolve():
+                            recovered_path.unlink()
+                    except Exception:
+                        pass
                 except Exception as ex:
                     self.console_log.append(f"[!] Could not replace original file: {ex}")
             elif not should_replace:

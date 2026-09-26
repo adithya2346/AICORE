@@ -72,12 +72,16 @@ async def recover_image_endpoint(
             rec_file = Path(report.get("recoveredFilePath", ""))
             if orig.exists() and rec_file.exists():
                 try:
+                    # Clean up any leftover backup file
                     backup = orig.with_name(f"{orig.stem}_corrupted_backup{orig.suffix}")
-                    shutil.copy2(orig, backup)
+                    if backup.exists():
+                        try:
+                            backup.unlink()
+                        except Exception:
+                            pass
                     shutil.copy2(rec_file, orig)
                     report["replacedOriginal"] = True
-                    report["backupPath"] = str(backup.resolve())
-                    report["backupFileName"] = backup.name
+                    report["recoveredFilePath"] = str(orig.resolve())
                 except Exception as ex:
                     report["replaceError"] = str(ex)
 
@@ -93,7 +97,7 @@ class ReplaceFileRequest(BaseModel):
 
 @router.post("/replace", summary="Replace original corrupted file with recovered file")
 def replace_corrupted_file(req: ReplaceFileRequest):
-    """Replaces the corrupted file on disk with the recovered file, saving a .corrupted_backup first."""
+    """Replaces the corrupted file on disk with the recovered file (single original file output)."""
     safe_rec_name = Path(req.recovered_filename).name
     rec_path = settings.output_dir / safe_rec_name
     if not rec_path.exists():
@@ -103,17 +107,21 @@ def replace_corrupted_file(req: ReplaceFileRequest):
     if not target.exists():
         raise HTTPException(status_code=404, detail=f"Target corrupted file '{target}' not found.")
 
+    # Clean up any leftover backup file
     backup_name = f"{target.stem}_corrupted_backup{target.suffix}"
     backup_path = target.with_name(backup_name)
-    shutil.copy2(target, backup_path)
+    if backup_path.exists():
+        try:
+            backup_path.unlink()
+        except Exception:
+            pass
+
     shutil.copy2(rec_path, target)
 
     return {
         "status": "success",
         "message": f"Corrupted file '{target.name}' successfully replaced with recovered file.",
-        "target_path": str(target.resolve()),
-        "backup_path": str(backup_path.resolve()),
-        "backup_filename": backup_name
+        "target_path": str(target.resolve())
     }
 
 

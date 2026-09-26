@@ -348,10 +348,13 @@ class AutoRecoverySentinel:
                     with open(target_dest, "wb") as f_out:
                         f_out.write(raw)
 
-                    # Also save a copy in output recovery directory
+                    # Clean up any old duplicate copy in output recovery directory if present
                     out_copy = settings.output_dir / f"auto_recovered_{filename}"
-                    with open(out_copy, "wb") as f_out2:
-                        f_out2.write(raw)
+                    if out_copy.exists():
+                        try:
+                            out_copy.unlink()
+                        except Exception:
+                            pass
 
                     return {
                         "path": str(target_dest.resolve()),
