@@ -391,9 +391,11 @@ class BeautifulRecoveryWorker(QThread):
                                     else:
                                         success_rate_val = round(min(100.0, max(88.0, integ_score * 0.95)), 1)
 
+                                actual_filename = self.source_path.name if (self.source_path and self.source_path.name) else rec_path.name
                                 recovered_file = {
                                     "path": str(rec_path.resolve()),
-                                    "name": rec_path.name,
+                                    "name": actual_filename,
+                                    "original_name": actual_filename,
                                     "type": ai_report.get("fileType", "JPEG"),
                                     "size": len(rec_bytes),
                                     "raw_bytes": rec_bytes,
@@ -467,7 +469,7 @@ class BeautifulRecoveryWorker(QThread):
                 )
 
                 ext = target_fmt if target_fmt != "unknown" else "bin"
-                out_name = f"recovered_artifact.{ext}"
+                out_name = self.source_path.name if (self.source_path and self.source_path.name) else f"recovered.{ext}"
                 out_path = output_dir / out_name
                 with open(out_path, "wb") as f_out:
                     f_out.write(best.reconstructed_bytes)
@@ -2392,6 +2394,11 @@ class BeautifulRecoveryApp(QMainWindow):
         replaced = False
         backup_str = ""
 
+        # Ensure the filename is ALWAYS the actual original filename
+        actual_name = source_path.name if (source_path and source_path.name) else data.get("name", "")
+        if actual_name:
+            data["name"] = actual_name
+
         if source_path and source_path.exists() and recovered_path.exists():
             should_replace = getattr(self, "replace_corrupted_chk", None) and self.replace_corrupted_chk.isChecked()
             if should_replace and source_path.resolve() != recovered_path.resolve():
@@ -2406,16 +2413,22 @@ class BeautifulRecoveryApp(QMainWindow):
                     replaced = True
                     backup_str = backup_path.name
                     data["restored_to"] = str(source_path.resolve())
+                    data["path"] = str(source_path.resolve())
                     self.console_log.append(f"[✓ REPLACED] Corrupted file '{source_path.name}' replaced with recovered file!")
                     self.console_log.append(f"[*] Safety backup saved as: {backup_path.name}")
                 except Exception as ex:
                     self.console_log.append(f"[!] Could not replace original file: {ex}")
+            elif not should_replace:
+                data["restored_to"] = str(recovered_path.resolve())
+        else:
+            if recovered_path and recovered_path.exists():
+                data["restored_to"] = str(recovered_path.resolve())
 
         # Update showcase display (Stage 3)
         self.display_recovery_showcase(data)
 
         # Update Stage 1 monitored files table & alert card
-        fn = source_path.name if source_path else data.get("name", "")
+        fn = data.get("name", source_path.name if source_path else "")
         self.alert_badge.setText("✓ PIPELINE COMPLETED: FINAL DATA DELIVERED!")
         self.alert_badge.setStyleSheet("color: #34d399; font-size: 11px; font-weight: 800;")
         self.alert_name_lbl.setText(f"✓ Final Data: {fn}")

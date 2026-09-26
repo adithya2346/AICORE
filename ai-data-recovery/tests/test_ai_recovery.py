@@ -308,7 +308,8 @@ def test_8_original_file_remains_unchanged(recovery_svc, tmp_path):
     assert initial_hash == post_hash, "Original file was modified! Immutability violated."
     assert report["recoveredFilePath"] != str(original_file_path)
     if report["recoveredFilePath"]:
-        assert Path(report["recoveredFilePath"]).name != original_file_path.name
+        assert Path(report["recoveredFilePath"]).name == original_file_path.name
+        assert report["recoveredFileName"] == original_file_path.name
 
 
 # --------------------------------------------------------------------------

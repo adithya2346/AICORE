@@ -214,7 +214,7 @@ class AIRecoveryService:
         # Step 3: Check if file is 100% healthy
         if analysis.is_fully_intact and not analysis.corruption_detected:
             # DO NOT call the AI API!
-            saved_name = f"recovered_exact_{uuid.uuid4().hex[:8]}_{filename}"
+            saved_name = filename
             output_path = settings.output_dir / saved_name
             with open(output_path, "wb") as f:
                 f.write(file_bytes)
@@ -289,7 +289,7 @@ class AIRecoveryService:
             if local_inp is not None:
                 base_img = local_inp
 
-        saved_base_name = f"recovered_partial_{uuid.uuid4().hex[:8]}_{filename}"
+        saved_base_name = filename
         base_output_path = settings.output_dir / saved_base_name
         
         # Save base recovered image
@@ -383,8 +383,8 @@ class AIRecoveryService:
                 ai_success = False
         # Step 7: Finalize Output and Honest Metrics
         if ai_success and restored_img is not None:
-            # Save AI output as a NEW file (never overwrite original or base)
-            ai_saved_name = f"recovered_ai_{uuid.uuid4().hex[:8]}_{filename}"
+            # Save recovered image with authentic filename
+            ai_saved_name = filename
             ai_output_path = settings.output_dir / ai_saved_name
             restored_img.save(ai_output_path, format=save_format, quality=95)
             final_bytes = ai_output_path.read_bytes()
