@@ -51,8 +51,10 @@ from backend.recovery.reconstruction import ReconstructionEngine
 from backend.recovery.confidence import ConfidenceEngine
 from backend.security.hashing import calculate_file_sha256, calculate_bytes_sha256
 from backend.recovery.folder_sentinel import (
-    FolderAnalyzer, AutoRecoverySentinel, FolderVault, recover_target_file
+    FolderAnalyzer, AutoRecoverySentinel, FolderVault, recover_target_file,
+    SystemWideSentinelManager, DriveSentinelWatcher
 )
+from backend.recovery.drive_detector import StorageDevice, StorageDeviceDetector
 from backend.recovery.recycle_bin import WindowsRecycleBin
 
 # Modern Cyber Dark Premium Stylesheet
@@ -511,35 +513,67 @@ class BeautifulRecoveryWorker(QThread):
 
 
 class SentinelThread(QThread):
-    """Real-Time Folder Sentinel Worker Thread."""
+    """System-Wide Real-Time Storage Sentinel Worker Thread."""
     deletion_detected = pyqtSignal(dict)  # del_info dict
     file_recovered = pyqtSignal(dict)     # recovered_info dict
+    file_event = pyqtSignal(dict)         # live file event
+    drives_updated = pyqtSignal(list)     # list of device dicts
+    stats_updated = pyqtSignal(dict)      # system stats dict
     log_emitted = pyqtSignal(str)
 
-    def __init__(self, directory: str, target_filename: str = "*", auto_recover: bool = True):
+    def __init__(self, directory: Optional[str] = None, target_filename: str = "*", auto_recover: bool = True):
         super().__init__()
         self.directory = directory
         self.target_filename = target_filename
         self.auto_recover = auto_recover
-        self.sentinel: Optional[AutoRecoverySentinel] = None
+        self.manager: Optional[SystemWideSentinelManager] = None
+        self._is_running = True
+
+    @property
+    def sentinel(self):
+        return self.manager
 
     def run(self):
-        self.sentinel = AutoRecoverySentinel(
-            directory=self.directory,
-            target_filename=self.target_filename,
+        self.manager = SystemWideSentinelManager(
             auto_recover=self.auto_recover,
+            on_event=lambda ev: self.file_event.emit(ev),
             on_deletion=lambda del_info: self.deletion_detected.emit(del_info),
             on_recovery=lambda rec_info: self.file_recovered.emit(rec_info),
+            on_drive_discovered=lambda dev: self.log_emitted.emit(f"[🔌 DRIVE DETECTED] Storage device {dev.drive_letter} ({dev.drive_type_desc}) connected. Sentinel monitoring started."),
+            on_drive_disconnected=lambda drv: self.log_emitted.emit(f"[⚠️ DRIVE DISCONNECTED] Storage device {drv} was unplugged. Watcher released; Shadow Vault backups preserved."),
             on_log=lambda msg: self.log_emitted.emit(msg),
-            poll_interval=0.35
         )
-        self.sentinel.start()
-        while self.sentinel and self.sentinel.is_active():
-            self.msleep(150)
+        self.manager.start_all()
+        self.drives_updated.emit([d.to_dict() for d in self.manager.known_devices.values()])
+        self.stats_updated.emit(self.manager.get_system_stats())
+
+        while self._is_running:
+            self.msleep(1000)
+            if self.manager and self._is_running:
+                try:
+                    self.stats_updated.emit(self.manager.get_system_stats())
+                    self.drives_updated.emit([d.to_dict() for d in self.manager.known_devices.values()])
+                except Exception:
+                    pass
+
+    def toggle_drive(self, drive_letter: str) -> bool:
+        if self.manager:
+            res = self.manager.toggle_drive(drive_letter)
+            self.drives_updated.emit([d.to_dict() for d in self.manager.known_devices.values()])
+            self.stats_updated.emit(self.manager.get_system_stats())
+            return res
+        return False
+
+    def refresh_drives(self):
+        if self.manager:
+            self.manager.refresh_drives()
+            self.drives_updated.emit([d.to_dict() for d in self.manager.known_devices.values()])
+            self.stats_updated.emit(self.manager.get_system_stats())
 
     def stop(self):
-        if self.sentinel:
-            self.sentinel.stop()
+        self._is_running = False
+        if self.manager:
+            self.manager.stop_all()
 
 
 class FolderAnalysisThread(QThread):
@@ -1417,90 +1451,142 @@ class BeautifulRecoveryApp(QMainWindow):
         root_layout.addWidget(self.console_log)
 
     # ═════════════════════════════════════════════════════════════════════════
-    # STAGE 1: REAL-TIME FOLDER MONITOR & DELETED FILE/PHOTO RECOVERY
+    # STAGE 1: SYSTEM-WIDE REAL-TIME STORAGE MONITOR & DELETED FILE RECOVERY
     # ═════════════════════════════════════════════════════════════════════════
     def create_sentinel_tab(self) -> QWidget:
-        # Stage 1 Card: Folder Configuration, Deletion Alert Card, & Files Table
         left_card = QFrame()
         left_card.setObjectName("glassCard")
         left_layout = QVBoxLayout(left_card)
-        left_layout.setContentsMargins(18, 18, 18, 18)
-        left_layout.setSpacing(12)
+        left_layout.setContentsMargins(18, 16, 18, 16)
+        left_layout.setSpacing(10)
 
-        # Step 1: Directory Selection
-        dir_lbl = QLabel("MONITORED LAPTOP FOLDER")
-        dir_lbl.setStyleSheet("color: #38bdf8; font-size: 11px; font-weight: 800; letter-spacing: 0.8px;")
-        left_layout.addWidget(dir_lbl)
+        # Header Section
+        header_row = QHBoxLayout()
+        header_vbox = QVBoxLayout()
+        header_vbox.setSpacing(2)
+        title_lbl = QLabel("SYSTEM-WIDE STORAGE MONITORING")
+        title_lbl.setStyleSheet("color: #38bdf8; font-size: 13px; font-weight: 800; letter-spacing: 0.8px;")
+        sub_lbl = QLabel("Continuous simultaneous monitoring across all internal SSDs, HDDs, and USB storage drives.")
+        sub_lbl.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        header_vbox.addWidget(title_lbl)
+        header_vbox.addWidget(sub_lbl)
+        header_row.addLayout(header_vbox)
+        header_row.addStretch()
 
-        dir_input_row = QHBoxLayout()
-        dir_input_row.setSpacing(8)
-        self.dir_input = QLineEdit()
-        self.dir_input.setPlaceholderText("Enter or browse folder path (e.g. C:\\Users\\...\\Desktop)")
-        default_desktop = str(Path.home() / "Desktop")
-        self.dir_input.setText(default_desktop)
+        self.storage_status_badge = QLabel("🟢 ALL DRIVES ACTIVE")
+        self.storage_status_badge.setStyleSheet("""
+            background-color: #062e24;
+            color: #34d399;
+            font-size: 11px;
+            font-weight: 800;
+            padding: 6px 14px;
+            border-radius: 16px;
+            border: 1px solid #059669;
+        """)
+        header_row.addWidget(self.storage_status_badge)
+        left_layout.addLayout(header_row)
 
-        browse_dir_btn = QPushButton("📁 Browse...")
-        browse_dir_btn.clicked.connect(self.browse_directory)
-        dir_input_row.addWidget(self.dir_input, stretch=1)
-        dir_input_row.addWidget(browse_dir_btn)
-        left_layout.addLayout(dir_input_row)
+        # ── KPI METRICS CARDS ROW (6 METRICS) ───────────────────────────────
+        kpi_grid = QHBoxLayout()
+        kpi_grid.setSpacing(8)
 
-        # Quick Jump Folder Pills
-        quick_row = QHBoxLayout()
-        quick_row.setSpacing(6)
-        
-        btn_desk = QPushButton("🖥️ Desktop")
-        btn_desk.setObjectName("quickPillBtn")
-        btn_desk.clicked.connect(lambda: self.set_quick_dir("Desktop"))
+        def _make_kpi(title: str, default_val: str, color: str = "#38bdf8"):
+            f = QFrame()
+            f.setStyleSheet("""
+                QFrame {
+                    background-color: #0f172a;
+                    border: 1px solid #1e293b;
+                    border-radius: 8px;
+                    padding: 4px 6px;
+                }
+            """)
+            vbox = QVBoxLayout(f)
+            vbox.setContentsMargins(6, 4, 6, 4)
+            vbox.setSpacing(1)
+            t = QLabel(title)
+            t.setStyleSheet("color: #64748b; font-size: 9px; font-weight: 700; text-transform: uppercase;")
+            val = QLabel(default_val)
+            val.setStyleSheet(f"color: {color}; font-size: 13px; font-weight: 800;")
+            val.setAlignment(Qt.AlignLeft)
+            vbox.addWidget(t)
+            vbox.addWidget(val)
+            return f, val
 
-        btn_down = QPushButton("📥 Downloads")
-        btn_down.setObjectName("quickPillBtn")
-        btn_down.clicked.connect(lambda: self.set_quick_dir("Downloads"))
+        card_drives, self.kpi_drives_val = _make_kpi("Drives Detected", "1", "#38bdf8")
+        card_active, self.kpi_active_val = _make_kpi("Active Monitoring", "1", "#34d399")
+        card_disc, self.kpi_disc_val = _make_kpi("Disconnected", "0", "#94a3b8")
+        card_files, self.kpi_files_val = _make_kpi("Files Monitored", "0", "#a78bfa")
+        card_prot, self.kpi_protected_val = _make_kpi("Files Protected", "0", "#38bdf8")
+        card_dels, self.kpi_deletions_val = _make_kpi("Deletion Events", "0", "#f43f5e")
 
-        btn_docs = QPushButton("📄 Documents")
-        btn_docs.setObjectName("quickPillBtn")
-        btn_docs.clicked.connect(lambda: self.set_quick_dir("Documents"))
+        kpi_grid.addWidget(card_drives)
+        kpi_grid.addWidget(card_active)
+        kpi_grid.addWidget(card_disc)
+        kpi_grid.addWidget(card_files)
+        kpi_grid.addWidget(card_prot)
+        kpi_grid.addWidget(card_dels)
+        left_layout.addLayout(kpi_grid)
 
-        btn_pics = QPushButton("🖼️ Pictures")
-        btn_pics.setObjectName("quickPillBtn")
-        btn_pics.clicked.connect(lambda: self.set_quick_dir("Pictures"))
+        # ── STORAGE MONITORING TABLE ─────────────────────────────────────────
+        tbl_header_row = QHBoxLayout()
+        tbl_lbl = QLabel("ATTACHED STORAGE DRIVES & VOLUMES")
+        tbl_lbl.setStyleSheet("color: #64748b; font-size: 10px; font-weight: 800; letter-spacing: 0.6px;")
+        tbl_header_row.addWidget(tbl_lbl)
+        tbl_header_row.addStretch()
+        left_layout.addLayout(tbl_header_row)
 
-        quick_row.addWidget(btn_desk)
-        quick_row.addWidget(btn_down)
-        quick_row.addWidget(btn_docs)
-        quick_row.addWidget(btn_pics)
-        quick_row.addStretch()
-        left_layout.addLayout(quick_row)
+        self.drives_table = QTableWidget(0, 6)
+        self.drives_table.setHorizontalHeaderLabels(["Drive", "Type", "Filesystem", "Capacity (Free / Total)", "Status", "Control"])
+        self.drives_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.drives_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.drives_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.drives_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Stretch)
+        self.drives_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.drives_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        self.drives_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.drives_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.drives_table.setMaximumHeight(135)
+        left_layout.addWidget(self.drives_table)
 
-        # Real-Time Controls Row
+        # ── CONTROLS ROW ─────────────────────────────────────────────────────
         ctrl_row = QHBoxLayout()
-        ctrl_row.setSpacing(10)
+        ctrl_row.setSpacing(8)
 
-        self.guard_toggle_btn = QPushButton("⏹️ Pause Real-Time Monitor")
-        self.guard_toggle_btn.setObjectName("guardActiveBtn")
+        self.start_all_btn = QPushButton("▶️ Start All Monitoring")
+        self.start_all_btn.setObjectName("heroActionBtn")
+        self.start_all_btn.clicked.connect(self.start_sentinel_monitor)
+
+        self.stop_all_btn = QPushButton("⏹️ Stop All")
+        self.stop_all_btn.clicked.connect(self.stop_sentinel_monitor)
+
+        self.refresh_drives_btn = QPushButton("🔄 Refresh Drives")
+        self.refresh_drives_btn.clicked.connect(self.refresh_sentinel_drives)
+
+        # Single Folder Picker Compatibility Row
+        self.dir_input = QLineEdit()
+        self.dir_input.setVisible(False)
+        self.dir_input.setText(str(Path.home() / "Desktop"))
+        self.guard_toggle_btn = QPushButton("⏹️ Pause")
+        self.guard_toggle_btn.setVisible(False)
         self.guard_toggle_btn.clicked.connect(self.toggle_sentinel_guard)
-
-        self.rescan_btn = QPushButton("🔍 Re-Scan Folder")
+        self.rescan_btn = QPushButton("🔍 Scan")
+        self.rescan_btn.setVisible(False)
         self.rescan_btn.clicked.connect(self.analyze_current_folder)
 
-        self.auto_recover_chk = QCheckBox("⚡ Auto-recover to same path immediately when deleted")
-        self.auto_recover_chk.setChecked(True)
-        self.auto_recover_chk.stateChanged.connect(self.on_auto_recover_toggle)
-
-        ctrl_row.addWidget(self.guard_toggle_btn)
-        ctrl_row.addWidget(self.rescan_btn)
+        ctrl_row.addWidget(self.start_all_btn)
+        ctrl_row.addWidget(self.stop_all_btn)
+        ctrl_row.addWidget(self.refresh_drives_btn)
         ctrl_row.addStretch()
         left_layout.addLayout(ctrl_row)
 
-        # Recovery Permission Preference
+        # Recovery Preference Row
         pref_row = QHBoxLayout()
         pref_row.setSpacing(14)
-        
         self.require_permission_chk = QCheckBox("🛡️ Ask my permission before recovering (Prompt me)")
         self.require_permission_chk.setChecked(True)
         self.require_permission_chk.stateChanged.connect(self.on_require_permission_toggle)
 
-        self.auto_recover_chk = QCheckBox("⚡ Auto-recover without asking")
+        self.auto_recover_chk = QCheckBox("⚡ Auto-recover immediately without asking")
         self.auto_recover_chk.setChecked(False)
         self.auto_recover_chk.stateChanged.connect(self.on_auto_recover_toggle)
 
@@ -1513,8 +1599,8 @@ class BeautifulRecoveryApp(QMainWindow):
         self.deletion_alert_frame = QFrame()
         self.deletion_alert_frame.setObjectName("alertCard")
         alert_vbox = QVBoxLayout(self.deletion_alert_frame)
-        alert_vbox.setContentsMargins(14, 12, 14, 12)
-        alert_vbox.setSpacing(8)
+        alert_vbox.setContentsMargins(14, 10, 14, 10)
+        alert_vbox.setSpacing(6)
 
         alert_header = QHBoxLayout()
         self.alert_badge = QLabel("⚠️ DELETED FILE / PHOTO DETECTED")
@@ -1539,7 +1625,7 @@ class BeautifulRecoveryApp(QMainWindow):
         detail_col.setSpacing(2)
         self.alert_name_lbl = QLabel("No deleted files detected")
         self.alert_name_lbl.setStyleSheet("color: #ffffff; font-size: 14px; font-weight: 700;")
-        self.alert_path_lbl = QLabel("Real-time monitor is actively watching this folder. Delete any file to test.")
+        self.alert_path_lbl = QLabel("Sentinel Watcher is monitoring all attached storage devices. Delete any file to test.")
         self.alert_path_lbl.setStyleSheet("color: #94a3b8; font-size: 12px;")
         detail_col.addWidget(self.alert_name_lbl)
         detail_col.addWidget(self.alert_path_lbl)
@@ -1583,10 +1669,10 @@ class BeautifulRecoveryApp(QMainWindow):
 
         # ── MONITORED FILES IN FOLDER TABLE ──────────────────────────────────
         table_title_row = QHBoxLayout()
-        t_lbl = QLabel("FOLDER FILES & REAL-TIME STATUS")
+        t_lbl = QLabel("PROTECTED FILES & REAL-TIME ACTIVITY")
         t_lbl.setStyleSheet("color: #64748b; font-size: 10px; font-weight: 800; letter-spacing: 0.6px;")
         
-        self.files_count_lbl = QLabel("0 files")
+        self.files_count_lbl = QLabel("0 files protected")
         self.files_count_lbl.setStyleSheet("color: #94a3b8; font-size: 11px; font-weight: 600;")
 
         table_title_row.addWidget(t_lbl)
@@ -1604,6 +1690,8 @@ class BeautifulRecoveryApp(QMainWindow):
         self.files_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.files_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         left_layout.addWidget(self.files_table)
+
+        return left_card
 
         return left_card
 
@@ -1842,8 +1930,7 @@ class BeautifulRecoveryApp(QMainWindow):
     # USER INTERACTIONS & REAL-TIME MONITORING
     # ═════════════════════════════════════════════════════════════════════════
     def auto_start_default_monitor(self):
-        """Automatically begins monitoring and analysis on startup."""
-        self.analyze_current_folder()
+        """Automatically begins system-wide storage monitoring on startup."""
         self.start_sentinel_monitor()
 
     def set_quick_dir(self, name: str):
@@ -1948,26 +2035,32 @@ class BeautifulRecoveryApp(QMainWindow):
         self.console_log.append(f"❌ Analysis failed: {err}")
 
     def start_sentinel_monitor(self):
-        d = self.dir_input.text().strip()
-        if not d or not os.path.exists(d):
-            return
-
         if self.sentinel_thread and self.sentinel_thread.isRunning():
             return
 
         # auto_recover is False by default so it requests user permission
         auto_rec = self.auto_recover_chk.isChecked() and not self.require_permission_chk.isChecked()
-        self.sentinel_thread = SentinelThread(d, target_filename="*", auto_recover=auto_rec)
+        self.sentinel_thread = SentinelThread(auto_recover=auto_rec)
         self.sentinel_thread.deletion_detected.connect(self.on_deletion_detected)
         self.sentinel_thread.file_recovered.connect(self.on_auto_recovered)
+        self.sentinel_thread.file_event.connect(self.on_file_event)
+        self.sentinel_thread.drives_updated.connect(self.on_drives_updated)
+        self.sentinel_thread.stats_updated.connect(self.on_stats_updated)
         self.sentinel_thread.log_emitted.connect(self.console_log.append)
         self.sentinel_thread.start()
 
-        self.guard_toggle_btn.setText("⏹️ Pause Real-Time Monitor")
-        self.guard_toggle_btn.setObjectName("guardActiveBtn")
-        self.guard_toggle_btn.setStyleSheet("")
+        self.storage_status_badge.setText("🟢 ALL DRIVES ACTIVE")
+        self.storage_status_badge.setStyleSheet("""
+            background-color: #062e24;
+            color: #34d399;
+            font-size: 11px;
+            font-weight: 800;
+            padding: 6px 14px;
+            border-radius: 16px;
+            border: 1px solid #059669;
+        """)
 
-        self.shield_badge.setText("🟢 REAL-TIME MONITOR: ACTIVE")
+        self.shield_badge.setText("🟢 SENTINEL: SYSTEM-WIDE ACTIVE")
         self.shield_badge.setStyleSheet("""
             background-color: #062e24;
             color: #34d399;
@@ -1977,7 +2070,7 @@ class BeautifulRecoveryApp(QMainWindow):
             border-radius: 20px;
             border: 1px solid #059669;
         """)
-        self.console_log.append(f"[🛡️ MONITOR STARTED] Real-time folder protection active on '{d}'")
+        self.console_log.append("[🛡️ SENTINEL ACTIVE] System-wide multi-drive real-time monitoring started.")
 
     def stop_sentinel_monitor(self):
         if self.sentinel_thread and self.sentinel_thread.isRunning():
@@ -1986,11 +2079,18 @@ class BeautifulRecoveryApp(QMainWindow):
             self.sentinel_thread.wait(1000)
             self.sentinel_thread = None
 
-        self.guard_toggle_btn.setText("🟢 Start Real-Time Monitor")
-        self.guard_toggle_btn.setObjectName("guardStandbyBtn")
-        self.guard_toggle_btn.setStyleSheet("")
+        self.storage_status_badge.setText("⏸️ MONITORING PAUSED")
+        self.storage_status_badge.setStyleSheet("""
+            background-color: #1f1b0a;
+            color: #f59e0b;
+            font-size: 11px;
+            font-weight: 800;
+            padding: 6px 14px;
+            border-radius: 16px;
+            border: 1px solid #d97706;
+        """)
 
-        self.shield_badge.setText("⏸️ REAL-TIME MONITOR: PAUSED")
+        self.shield_badge.setText("⏸️ SENTINEL: PAUSED")
         self.shield_badge.setStyleSheet("""
             background-color: #1f1b0a;
             color: #f59e0b;
@@ -2000,7 +2100,7 @@ class BeautifulRecoveryApp(QMainWindow):
             border-radius: 20px;
             border: 1px solid #d97706;
         """)
-        self.console_log.append("[*] Real-Time Monitor paused.")
+        self.console_log.append("[*] System-wide storage monitoring paused.")
 
     def restart_sentinel_monitor(self):
         self.stop_sentinel_monitor()
@@ -2011,6 +2111,124 @@ class BeautifulRecoveryApp(QMainWindow):
             self.stop_sentinel_monitor()
         else:
             self.start_sentinel_monitor()
+
+    def refresh_sentinel_drives(self):
+        if self.sentinel_thread:
+            self.sentinel_thread.refresh_drives()
+        else:
+            devices = StorageDeviceDetector.enumerate_drives()
+            self.on_drives_updated([d.to_dict() for d in devices])
+            self.kpi_drives_val.setText(str(len(devices)))
+        self.console_log.append("[*] Scanned and refreshed all connected storage volumes.")
+
+    def toggle_drive(self, drive_letter: str):
+        if self.sentinel_thread:
+            is_active = self.sentinel_thread.toggle_drive(drive_letter)
+            self.console_log.append(f"[*] Drive {drive_letter} monitoring {'resumed' if is_active else 'paused'}.")
+
+    def on_stats_updated(self, stats: dict):
+        self.kpi_drives_val.setText(str(stats.get("total_drives_detected", 1)))
+        self.kpi_active_val.setText(str(stats.get("active_monitoring_count", 1)))
+        self.kpi_disc_val.setText(str(stats.get("disconnected_count", 0)))
+        self.kpi_files_val.setText(f"{stats.get('files_monitored', 0):,}")
+        self.kpi_protected_val.setText(f"{stats.get('files_protected', 0):,}")
+        self.kpi_deletions_val.setText(str(stats.get("deletion_events", 0)))
+        self.files_count_lbl.setText(f"{stats.get('files_protected', 0):,} files protected in Shadow Vault ({stats.get('vault_size_mb', 0):.1f} MB)")
+
+    def on_drives_updated(self, devices: list):
+        self.drives_table.setRowCount(len(devices))
+        for row, dev in enumerate(devices):
+            letter = dev.get("drive_letter", "")
+            vol_name = dev.get("volume_name", "")
+            dtype = dev.get("drive_type_desc", "")
+            fs = dev.get("filesystem", "")
+            tot_gb = dev.get("total_gb", 0)
+            fr_gb = dev.get("free_gb", 0)
+            pct = dev.get("used_percentage", 0)
+            cap_str = f"{fr_gb:.1f} GB free / {tot_gb:.1f} GB ({pct}% used)"
+            st = dev.get("status", "ready")
+
+            # Col 0: Drive Letter
+            c0 = QTableWidgetItem(f"💾 {letter} ({vol_name})")
+            c0.setForeground(QBrush(QColor("#38bdf8")))
+            c0.setFont(QFont("Segoe UI", 10, QFont.Bold))
+
+            # Col 1: Type
+            c1 = QTableWidgetItem(dtype)
+            c1.setForeground(QBrush(QColor("#e2e8f0")))
+
+            # Col 2: Filesystem
+            c2 = QTableWidgetItem(fs)
+            c2.setForeground(QBrush(QColor("#94a3b8")))
+
+            # Col 3: Capacity
+            c3 = QTableWidgetItem(cap_str)
+            c3.setForeground(QBrush(QColor("#cbd5e1")))
+
+            # Col 4: Status
+            if st == "monitoring":
+                st_text = "🟢 Active"
+                st_color = "#34d399"
+            elif st == "paused":
+                st_text = "🟡 Paused"
+                st_color = "#f59e0b"
+            else:
+                st_text = "⚪ Disconnected"
+                st_color = "#94a3b8"
+
+            c4 = QTableWidgetItem(st_text)
+            c4.setForeground(QBrush(QColor(st_color)))
+            c4.setTextAlignment(Qt.AlignCenter)
+
+            # Col 5: Action Button
+            btn = QPushButton("⏸️ Pause" if st == "monitoring" else "▶️ Start")
+            btn.setStyleSheet("""
+                QPushButton {
+                    background-color: #1e293b;
+                    border: 1px solid #334155;
+                    border-radius: 6px;
+                    padding: 3px 8px;
+                    font-size: 11px;
+                    color: #e2e8f0;
+                }
+                QPushButton:hover {
+                    background-color: #38bdf8;
+                    color: #0f172a;
+                    font-weight: 700;
+                }
+            """)
+            btn.clicked.connect(lambda _, drv=letter: self.toggle_drive(drv))
+
+            self.drives_table.setItem(row, 0, c0)
+            self.drives_table.setItem(row, 1, c1)
+            self.drives_table.setItem(row, 2, c2)
+            self.drives_table.setItem(row, 3, c3)
+            self.drives_table.setItem(row, 4, c4)
+            self.drives_table.setCellWidget(row, 5, btn)
+
+    def on_file_event(self, evt: dict):
+        ev_type = evt.get("type", "")
+        fn = evt.get("name", "")
+        drv = evt.get("drive", "")
+        if ev_type in ("created", "modified"):
+            row = 0
+            self.files_table.insertRow(row)
+            if self.files_table.rowCount() > 50:
+                self.files_table.removeRow(50)
+            st_item = QTableWidgetItem(f"🛡️ {ev_type.upper()}")
+            st_item.setForeground(QBrush(QColor("#34d399")))
+            n_item = QTableWidgetItem(f"[{drv}] {fn}")
+            n_item.setFont(QFont("Segoe UI", 9, QFont.Bold))
+            t_item = QTableWidgetItem(evt.get("extension", "").upper())
+            s_item = QTableWidgetItem(evt.get("timestamp", ""))
+            act_btn = QPushButton("✓ Vaulted")
+            act_btn.setEnabled(False)
+            act_btn.setStyleSheet("background-color: #162035; color: #38bdf8; font-size: 10px; border: none; padding: 2px;")
+            self.files_table.setItem(row, 0, st_item)
+            self.files_table.setItem(row, 1, n_item)
+            self.files_table.setItem(row, 2, t_item)
+            self.files_table.setItem(row, 3, s_item)
+            self.files_table.setCellWidget(row, 4, act_btn)
 
     # ── DELETION & RECOVERY EVENTS ───────────────────────────────────────────
     def on_deletion_detected(self, del_info: dict):
