@@ -12,6 +12,7 @@ Performs deep structural inspection of JPEG, PNG, and common image formats:
 import io
 import struct
 import logging
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Optional, Tuple
 from PIL import Image, ImageFile, ImageChops
@@ -51,11 +52,13 @@ class ImageCorruptionAnalyzer:
     def __init__(self, max_dimension: int = 4096):
         self.max_dimension = max_dimension
 
-    def detect_format(self, data: bytes) -> Tuple[Optional[str], Optional[str]]:
-        """Inspects magic header bytes to determine MIME type and format name."""
+    def detect_format(self, data: bytes, filename: Optional[str] = None) -> Tuple[Optional[str], Optional[str]]:
+        """Inspects magic header bytes and structural markers to determine MIME type and format name."""
         if not data or len(data) < 4:
             return None, None
-        
+
+        ext = Path(filename).suffix.lstrip(".").lower() if filename else ""
+
         if data.startswith(b"\xFF\xD8\xFF"):
             return "image/jpeg", "JPEG"
         if data.startswith(PNG_SIGNATURE):
@@ -66,10 +69,31 @@ class ImageCorruptionAnalyzer:
             return "image/webp", "WEBP"
         if data.startswith(b"BM"):
             return "image/bmp", "BMP"
-        
-        # Check if slightly corrupted JPEG (e.g. 1-2 damaged bytes at offset 0 but valid markers inside)
-        if b"\xFF\xC0" in data[:1024] or b"\xFF\xDB" in data[:1024] or b"\xFF\xC4" in data[:1024]:
-            return "image/jpeg", "JPEG"
+
+        prefix = data[:65536]
+        # Check if corrupted JPEG (shifted SOI, or standard markers inside header area)
+        if (
+            b"\xFF\xD8" in prefix or
+            b"JFIF" in prefix[:512] or
+            b"Exif" in prefix[:512] or
+            b"\xFF\xC0" in prefix or
+            b"\xFF\xDB" in prefix or
+            b"\xFF\xC4" in prefix or
+            ext in ("jpg", "jpeg")
+        ):
+            if ext in ("jpg", "jpeg") or b"\xFF\xD8" in prefix or b"JFIF" in prefix or b"Exif" in prefix or b"\xFF\xDA" in prefix:
+                return "image/jpeg", "JPEG"
+
+        # Check if corrupted PNG (missing/corrupted signature but IHDR present)
+        if b"IHDR" in prefix[:512] or b"\x89PNG" in prefix or ext == "png":
+            return "image/png", "PNG"
+
+        if ext == "webp" or b"WEBP" in prefix[:256]:
+            return "image/webp", "WEBP"
+        if ext == "gif" or b"GIF8" in prefix[:256]:
+            return "image/gif", "GIF"
+        if ext == "bmp" or prefix.startswith(b"BM"):
+            return "image/bmp", "BMP"
 
         return None, None
 
@@ -83,14 +107,25 @@ class ImageCorruptionAnalyzer:
         modified = False
 
         if fmt == "JPEG":
-            # 1. Missing SOI marker
+            # 1. Missing or shifted SOI marker
             if not repaired.startswith(JPEG_SOI):
-                marker_pos = repaired.find(b"\xFF\xD8")
-                if 0 < marker_pos < 128:
+                marker_pos = repaired.find(JPEG_SOI)
+                if 0 < marker_pos < 131072:
                     repaired = repaired[marker_pos:]
                     modified = True
                 else:
-                    if len(repaired) > 2 and repaired[0] == 0xFF:
+                    if len(repaired) > 2 and repaired[0] == 0xFF and (repaired[1] in (0xE0, 0xE1, 0xDB, 0xC0, 0xC4)):
+                        repaired = bytearray(JPEG_SOI) + repaired
+                        modified = True
+                    elif len(repaired) > 4 and repaired[2] == 0xFF and repaired[3] in (0xE0, 0xE1, 0xDB, 0xC0):
+                        repaired[0:2] = JPEG_SOI
+                        modified = True
+                    elif b"JFIF" in repaired[:64] or b"Exif" in repaired[:64]:
+                        jfif_pos = repaired.find(b"JFIF") if b"JFIF" in repaired[:64] else repaired.find(b"Exif")
+                        start_target = max(0, jfif_pos - 4)
+                        repaired = bytearray(JPEG_SOI) + repaired[start_target:]
+                        modified = True
+                    else:
                         repaired = bytearray(JPEG_SOI) + repaired
                         modified = True
 
@@ -101,12 +136,12 @@ class ImageCorruptionAnalyzer:
                 entropy_start = sos_pos + 2
                 eoi_pos = repaired.rfind(b"\xFF\xD9")
                 entropy_end = eoi_pos if eoi_pos != -1 else len(repaired)
-                
+
                 idx = entropy_start
                 while idx < entropy_end - 1 and idx < len(repaired) - 1:
                     if repaired[idx] == 0xFF:
                         nxt = repaired[idx + 1]
-                        # If a rogue SOF marker (0xC0-0xCF) or other table marker appears after SOS unescaped:
+                        # If a rogue SOF marker (0xC0-0xCF) appears after SOS unescaped:
                         if 0xC0 <= nxt <= 0xCF:
                             # Byte-stuff as 0xFF 0x00 to prevent libjpeg "two SOF markers" error
                             repaired.insert(idx + 1, 0x00)
@@ -134,9 +169,9 @@ class ImageCorruptionAnalyzer:
                 if len(found_sofs) > 1:
                     # Keep the last SOF marker (usually the full resolution frame)
                     found_sofs.sort(key=lambda x: x[0])
-                    # Neutralize the earlier SOF marker by turning it into APP0 or COM
-                    first_pos, _ = found_sofs[0]
-                    repaired[first_pos + 1] = 0xFE  # Change to COM (comment) marker
+                    # Neutralize earlier SOF marker(s) by turning into COM (comment)
+                    for first_pos, _ in found_sofs[:-1]:
+                        repaired[first_pos + 1] = 0xFE
                     modified = True
 
             # 3. Truncated JPEG missing EOI marker / premature end
@@ -148,8 +183,26 @@ class ImageCorruptionAnalyzer:
                 modified = True
 
         elif fmt == "PNG":
-            # 1. Missing IEND chunk
-            if PNG_IEND not in repaired[-32:]:
+            # 1. Missing or corrupted PNG signature
+            if not repaired.startswith(PNG_SIGNATURE):
+                sig_pos = repaired.find(PNG_SIGNATURE)
+                if 0 < sig_pos < 65536:
+                    repaired = repaired[sig_pos:]
+                    modified = True
+                else:
+                    ihdr_pos = repaired.find(b"IHDR")
+                    if ihdr_pos != -1:
+                        if ihdr_pos >= 4:
+                            repaired = bytearray(PNG_SIGNATURE) + repaired[ihdr_pos - 4:]
+                        else:
+                            repaired = bytearray(PNG_SIGNATURE) + struct.pack(">I", 13) + repaired[ihdr_pos:]
+                        modified = True
+                    else:
+                        repaired = bytearray(PNG_SIGNATURE) + repaired
+                        modified = True
+
+            # 2. Missing IEND chunk
+            if PNG_IEND not in repaired[-64:]:
                 iend_chunk = struct.pack(">I", 0) + b"IEND" + struct.pack(">I", 0xAE426082)
                 repaired.extend(iend_chunk)
                 modified = True
@@ -176,7 +229,7 @@ class ImageCorruptionAnalyzer:
                 notes="Zero-byte payload or empty input file."
             )
 
-        mime, fmt = self.detect_format(raw_bytes)
+        mime, fmt = self.detect_format(raw_bytes, filename=filename)
         if not fmt:
             return CorruptionAnalysisResult(
                 is_valid_image_type=False,

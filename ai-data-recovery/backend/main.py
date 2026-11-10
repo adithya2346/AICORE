@@ -7,6 +7,7 @@ import uvicorn
 
 from backend.config import settings
 from backend.database.database import engine, Base
+import backend.database.models  # Register all models with Base.metadata
 from backend.api.recovery import router as recovery_router
 from backend.api.status import router as status_router
 from backend.api.results import router as results_router
@@ -44,6 +45,9 @@ from pathlib import Path
 static_dir = Path(__file__).resolve().parent / "static"
 if static_dir.exists():
     app.mount("/static", StaticFiles(directory=str(static_dir)), name="static")
+    assets_dir = static_dir / "assets"
+    if assets_dir.exists():
+        app.mount("/assets", StaticFiles(directory=str(assets_dir)), name="assets")
 
 @app.get("/", response_class=FileResponse)
 def serve_dashboard():

@@ -8,7 +8,7 @@ import os
 import shutil
 from pathlib import Path
 from typing import Optional
-from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException, status, Depends
 from fastapi.responses import FileResponse
 
 from backend.config import settings
@@ -18,6 +18,12 @@ router = APIRouter(prefix="/api/recover", tags=["ai_recovery"])
 recovery_service = AIRecoveryService()
 
 
+from backend.database.database import get_db
+from sqlalchemy.orm import Session
+import logging
+
+logger = logging.getLogger("ai_recovery_router")
+
 @router.post("", summary="Recover damaged image with conditional AI restoration")
 @router.post("/", summary="Recover damaged image with conditional AI restoration (trailing slash)")
 async def recover_image_endpoint(
@@ -26,7 +32,8 @@ async def recover_image_endpoint(
     provider: Optional[str] = Form(None),
     original_path: Optional[str] = Form(None),
     replace_corrupted: bool = Form(False),
-    test_mode: bool = Form(False)
+    test_mode: bool = Form(False),
+    db: Session = Depends(get_db)
 ):
     """
     Executes image recovery pipeline:
@@ -35,6 +42,7 @@ async def recover_image_endpoint(
     3. Executes non-destructive structural repair.
     4. Conditionally invokes AI inpainting ONLY if visual damage remains.
     5. Returns an honest forensic recovery report distinguishing exact, fragment, and AI-generated data.
+    6. Persists complete recovery results into PostgreSQL.
     """
     if not file or not file.filename:
         raise HTTPException(
@@ -60,6 +68,96 @@ async def recover_image_endpoint(
         provider_name=provider,
         test_mode=test_mode
     )
+
+    # Persist record into PostgreSQL
+    try:
+        from backend.database.repository import (
+            RecoveryJobRepository, FileRepository, FragmentRepository,
+            AIAnalysisRepository, RecoveryResultRepository, AuditLogRepository
+        )
+        from backend.security.hashing import calculate_bytes_sha256
+
+        file_hash = calculate_bytes_sha256(content)
+        job_status = "completed" if report.get("status") in ("success", "partial_success") else "failed"
+        job = RecoveryJobRepository.create_job(
+            db=db,
+            job_name=f"AI Image Recovery: {file.filename}",
+            status=job_status,
+            operation="recover_corrupted",
+            source_type="uploaded_file",
+            source_path=str(settings.input_dir / file.filename),
+            target_filename=file.filename,
+            target_type=report.get("fileType", "JPEG")
+        )
+
+        corr_pct = float(report.get("corruptionPercentage", 0.0))
+        file_rec = FileRepository.create_file(
+            db=db,
+            job_id=job.id,
+            original_name=file.filename,
+            detected_type=report.get("fileType", "JPEG"),
+            mime_type=file.content_type or f"image/{report.get('fileType', 'jpeg').lower()}",
+            file_size=len(content),
+            file_hash=file_hash,
+            storage_path=report.get("recoveredFilePath") or str(settings.input_dir / file.filename),
+            damage_percentage=corr_pct,
+            status=job_status
+        )
+
+        # Store fragments
+        for idx, frag_info in enumerate(report.get("fragments", []), 1):
+            FragmentRepository.create_fragment(
+                db=db,
+                file_id=file_rec.id,
+                fragment_index=idx,
+                offset_start=0,
+                offset_end=frag_info.get("size_bytes", 4096),
+                fragment_size=frag_info.get("size_bytes", 4096),
+                fragment_hash=file_hash[:32],
+                confidence=100.0 if frag_info.get("is_authentic") else 85.0,
+                is_valid=frag_info.get("is_authentic", True)
+            )
+
+        # Store AI Analysis
+        ai_conf_val = float(report.get("confidence", 0.9))
+        ai_conf_pct = ai_conf_val * 100.0 if ai_conf_val <= 1.0 else ai_conf_val
+        AIAnalysisRepository.create_or_update(
+            db=db,
+            file_id=file_rec.id,
+            detected_file_type=report.get("fileType", "JPEG"),
+            corruption_type="visual_and_structural" if corr_pct > 0 else "none",
+            confidence=min(100.0, max(0.0, ai_conf_pct)),
+            explanation=report.get("message", "Forensic analysis completed.")
+        )
+
+        # Store Recovery Result
+        rec_pct = float(report.get("successRate") or report.get("success_rate") or report.get("exactRecoveryPercentage") or 100.0)
+        rec_path = report.get("recoveredFilePath") or str(settings.output_dir / file.filename)
+        RecoveryResultRepository.create_result(
+            db=db,
+            file_id=file_rec.id,
+            recovered_path=rec_path,
+            recovered_size=report.get("recoveredFileSize", len(content)),
+            recovery_percentage=min(100.0, max(0.0, rec_pct)),
+            validation_status="PASS" if report.get("validation", {}).get("is_valid", True) else "PARTIAL",
+            output_hash=file_hash,
+            validation_details=report.get("validation")
+        )
+
+        AuditLogRepository.log(
+            db=db,
+            job_id=job.id,
+            action="RECOVERY_COMPLETED",
+            details={
+                "resultType": report.get("resultType"),
+                "recovery_percentage": rec_pct,
+                "aiUsed": report.get("aiUsed", False)
+            }
+        )
+        report["job_id"] = str(job.id)
+        report["id"] = str(job.id)
+    except Exception as db_err:
+        logger.warning(f"Could not persist recovery report to database: {db_err}")
 
     # Add download URL if a recovered file was generated
     if report.get("recoveredFileName"):

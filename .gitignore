@@ -25,6 +25,9 @@ htmlcov/
 *.log
 recovery_workspace/
 ai-data-recovery/recovery_workspace/
+recovered_output/
+_enterprise_ui_backup/
+*.patch
 
 # Node / Frontend
 node_modules/

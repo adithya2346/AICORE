@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Dict, Any, Optional, List
 import joblib
 import numpy as np
-from sklearn.ensemble import RandomForestClassifier
 
 from backend.config import settings
 from backend.ml.features import extract_single_fragment_features, SUPPORTED_TYPES
@@ -19,7 +18,7 @@ class FileTypeClassifier:
     """
     def __init__(self, model_path: Optional[Path] = None):
         self.model_path = model_path or MODEL_PATH
-        self.model: Optional[RandomForestClassifier] = None
+        self.model: Optional[Any] = None
         self.classes: List[str] = SUPPORTED_TYPES
         self.load()
 
@@ -40,6 +39,7 @@ class FileTypeClassifier:
             joblib.dump({"model": self.model, "classes": self.classes}, self.model_path)
 
     def fit(self, X: np.ndarray, y: List[str]) -> None:
+        from sklearn.ensemble import RandomForestClassifier
         clf = RandomForestClassifier(n_estimators=100, max_depth=12, random_state=42)
         clf.fit(X, y)
         self.model = clf

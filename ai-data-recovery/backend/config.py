@@ -30,7 +30,27 @@ DATASETS_DIR = BASE_DIR / "datasets"
 for path in [WORKSPACE_DIR, INPUT_DIR, OUTPUT_DIR, WORKING_COPIES_DIR, TEMP_DIR, MODELS_DIR, DATASETS_DIR]:
     path.mkdir(parents=True, exist_ok=True)
 
-DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{BASE_DIR}/recovery.db")
+# Database Configuration (Defaults to zero-configuration local SQLite recovery.db)
+DB_HOST = os.getenv("DB_HOST", "localhost")
+DB_PORT = os.getenv("DB_PORT", "5432")
+DB_NAME = os.getenv("DB_NAME", "data_recovery")
+DB_USER = os.getenv("DB_USER", "postgres")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "")
+
+if os.getenv("DATABASE_URL"):
+    RAW_DATABASE_URL = os.getenv("DATABASE_URL")
+elif os.getenv("DB_HOST") and os.getenv("DB_USER") and os.getenv("DB_PASSWORD"):
+    RAW_DATABASE_URL = f"postgresql://{DB_USER}:{DB_PASSWORD}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+else:
+    # Default to local persistent SQLite database
+    RAW_DATABASE_URL = f"sqlite:///{BASE_DIR}/recovery.db"
+
+# Normalize postgres:// to postgresql:// for SQLAlchemy compatibility if provided
+if RAW_DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = RAW_DATABASE_URL.replace("postgres://", "postgresql://", 1)
+else:
+    DATABASE_URL = RAW_DATABASE_URL
+
 
 class Settings(BaseModel):
     app_name: str = "AI-Assisted Intelligent Data Recovery & Digital Evidence Reconstruction"
@@ -43,7 +63,15 @@ class Settings(BaseModel):
     temp_dir: Path = TEMP_DIR
     models_dir: Path = MODELS_DIR
     datasets_dir: Path = DATASETS_DIR
+    
+    # Database Settings
+    db_host: str = DB_HOST
+    db_port: int = int(DB_PORT) if str(DB_PORT).isdigit() else 5432
+    db_name: str = DB_NAME
+    db_user: str = DB_USER
+    db_password: Optional[str] = DB_PASSWORD
     database_url: str = DATABASE_URL
+    
     default_scan_block_size: int = 4096
     max_memory_buffer_bytes: int = 64 * 1024 * 1024  # 64 MB
     entropy_threshold_high: float = 7.2  # Highly compressed/encrypted
