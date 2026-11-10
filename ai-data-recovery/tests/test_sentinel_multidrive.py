@@ -111,11 +111,21 @@ def test_drive_sentinel_file_events_and_recovery():
         target_file.unlink()
         time.sleep(0.6)
 
-        # 3. Verify deletion was captured and automatically restored to the original location
+        # 3. Verify deletion was captured silently without automatic restoration
         assert len(deletions_captured) >= 1
         assert deletions_captured[-1]["name"] == "classified_memo.pdf"
 
-        # The file should have been automatically recovered to target_file!
+        # The file is not automatically restored (user maintains complete control)
+        from backend.recovery.deleted_files_manager import DeletedFilesManager
+        records = DeletedFilesManager.get_all_records()
+        matching = [r for r in records if r.filename == "classified_memo.pdf"]
+        assert len(matching) >= 1
+        rec = matching[0]
+        assert rec.status == "Backup Available"
+
+        # 4. User triggers manual restoration
+        ok, msg = DeletedFilesManager.restore_record(rec)
+        assert ok is True
         assert target_file.exists()
         assert target_file.read_bytes() == sample_bytes
 
@@ -143,3 +153,53 @@ def test_system_wide_sentinel_manager():
     manager.stop_all()
     stats_after = manager.get_system_stats()
     assert stats_after["active_monitoring_count"] == 0
+
+
+
+def test_deleted_files_manager_manual_scenarios():
+    """Verify conflict handling, multi-restore, and unrecoverable status."""
+    from backend.recovery.deleted_files_manager import DeletedFilesManager, DeletedFileRecord
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Scenario 1: File without backup -> Recovery Unavailable
+        del_info_nobackup = {
+            "name": "unbacked_up_file.bin",
+            "full_path": str(Path(tmpdir) / "unbacked_up_file.bin"),
+            "directory": tmpdir,
+            "drive": "C:",
+            "size": 500,
+            "timestamp": "2026-11-10 13:00:00"
+        }
+        rec_nobackup = DeletedFilesManager.record_deletion(del_info_nobackup)
+        assert rec_nobackup.status == "Recovery Unavailable"
+        ok, msg = DeletedFilesManager.restore_record(rec_nobackup)
+        assert ok is False
+
+        # Scenario 2: Destination conflict detection (OCCUPIED)
+        f = Path(tmpdir) / "conflict_doc.txt"
+        f.write_text("Original text in shadow")
+        v_entry = FolderVault.store_file(f)
+
+        del_info_conflict = {
+            "name": "conflict_doc.txt",
+            "full_path": str(f),
+            "directory": tmpdir,
+            "drive": "C:",
+            "size": f.stat().st_size,
+            "timestamp": "2026-11-10 13:01:00"
+        }
+        rec_conflict = DeletedFilesManager.record_deletion(del_info_conflict)
+        assert rec_conflict.status == "Backup Available"
+
+        # Now write another file at original location to simulate collision
+        f.write_text("New blocking file occupying destination")
+        ok, reason = DeletedFilesManager.restore_record(rec_conflict, overwrite=False)
+        assert ok is False
+        assert reason == "OCCUPIED"
+
+        # Now restore with overwrite=True
+        ok_overwrite, msg_ow = DeletedFilesManager.restore_record(rec_conflict, overwrite=True)
+        assert ok_overwrite is True
+        assert f.read_text() == "Original text in shadow"
+        rec_after = DeletedFilesManager.get_record(rec_conflict.event_id)
+        assert rec_after.status == "Restored"

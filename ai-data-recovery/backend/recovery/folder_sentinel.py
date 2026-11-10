@@ -185,7 +185,10 @@ class FolderVault:
         idx = cls.load_index()
         matches = []
         fn_lower = filename.lower().strip()
-        norm_dir = os.path.normpath(directory).lower() if directory else None
+        try:
+            norm_dir = str(Path(directory).resolve()).lower() if directory else None
+        except Exception:
+            norm_dir = os.path.normpath(directory).lower() if directory else None
         target_drive = drive.upper().rstrip("\\") if drive else None
 
         for key, entry in idx.items():
@@ -205,8 +208,11 @@ class FolderVault:
                     continue
 
             if norm_dir:
-                e_dir = os.path.normpath(entry.get("directory", "")).lower()
-                if norm_dir in e_dir or e_dir in norm_dir:
+                try:
+                    e_dir = str(Path(entry.get("directory", "")).resolve()).lower() if entry.get("directory") else ""
+                except Exception:
+                    e_dir = os.path.normpath(entry.get("directory", "")).lower()
+                if norm_dir in e_dir or e_dir in norm_dir or os.path.normcase(norm_dir) == os.path.normcase(e_dir):
                     matches.append(entry)
             else:
                 matches.append(entry)
@@ -622,19 +628,23 @@ class DriveSentinelWatcher:
             "file_type_desc": file_type_desc,
             "has_backup": has_backup,
             "sha256": v_entry.get("sha256", "N/A"),
-            "timestamp": datetime.now().strftime("%H:%M:%S"),
-            "status": "deleted"
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "status": "Awaiting Manual Restoration" if has_backup else "Recovery Unavailable"
         }
 
-        self.log(f"⚠️ [DELETION DETECTED] {file_type_desc} '{filename}' deleted from {self.drive_letter} ({directory})!")
+        # Silently record in persistent DeletedFilesManager
+        try:
+            from backend.recovery.deleted_files_manager import DeletedFilesManager
+            record = DeletedFilesManager.record_deletion(del_info)
+            del_info["event_id"] = record.event_id
+            del_info["status"] = record.status
+            del_info["sha256"] = record.sha256
+        except Exception:
+            pass
+
+        self.log(f"⚠️ [DELETION DETECTED] {file_type_desc} '{filename}' deleted from {self.drive_letter} ({directory}). Logged to Deleted Files.")
         if self.on_deletion:
             self.on_deletion(del_info)
-
-        if self.auto_recover and has_backup:
-            self.log(f"🛡️ [AUTO-RECOVERY] Restoring '{filename}' to {self.drive_letter} from Shadow Vault...")
-            rec_info = self._restore_file(filename, directory, v_entry)
-            if rec_info and self.on_recovery:
-                self.on_recovery(rec_info)
 
     def _restore_file(self, filename: str, directory: Path, v_entry: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """Restores file from Shadow Vault after cryptographic SHA-256 verification."""
@@ -952,15 +962,18 @@ class AutoRecoverySentinel:
                         "status": "deleted"
                     }
 
-                    self.log(f"⚠️ [DELETION DETECTED] {file_type_desc} '{d_name}' was deleted from '{self.directory}'!")
+                    # Silently record in persistent DeletedFilesManager
+                    try:
+                        from backend.recovery.deleted_files_manager import DeletedFilesManager
+                        rec = DeletedFilesManager.record_deletion(del_info)
+                        del_info["event_id"] = rec.event_id
+                        del_info["status"] = rec.status
+                    except Exception:
+                        pass
+
+                    self.log(f"⚠️ [DELETION DETECTED] {file_type_desc} '{d_name}' was deleted from '{self.directory}'. Logged to Deleted Files.")
                     if self.on_deletion:
                         self.on_deletion(del_info)
-
-                    if self.auto_recover:
-                        self.log(f"🛡️ [AUTO-RECOVERY] Restoring {file_type_desc.lower()} '{d_name}' to same path...")
-                        recovered_info = self._auto_recover_file(d_name)
-                        if recovered_info and self.on_recovery:
-                            self.on_recovery(recovered_info)
 
                 self._known_files = current_files
             except Exception as e:

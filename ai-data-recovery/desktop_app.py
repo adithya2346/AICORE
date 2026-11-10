@@ -56,6 +56,7 @@ from backend.recovery.folder_sentinel import (
 )
 from backend.recovery.drive_detector import StorageDevice, StorageDeviceDetector
 from backend.recovery.recycle_bin import WindowsRecycleBin
+from backend.recovery.deleted_files_manager import DeletedFilesManager, DeletedFileRecord
 
 # Modern Cyber Dark Premium Stylesheet
 PREMIUM_THEME = """
@@ -1342,6 +1343,125 @@ class AdjustableResultDialog(QDialog):
                     os.startfile(parent_dir)
 
 
+class SilentToastNotification(QFrame):
+    """
+    Non-blocking, floating modern toast notification placed in the bottom-right corner of the application window.
+    Dismisses automatically after a few seconds without stealing focus or blocking user interaction.
+    Provides a direct 1-click button to jump to the Deleted Files section.
+    """
+    closed = pyqtSignal()
+    view_requested = pyqtSignal()
+
+    def __init__(self, parent, filename: str, location: str, count: int = 1):
+        super().__init__(parent)
+        self.setObjectName("silentToast")
+        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
+        self.setWindowFlags(Qt.SubWindow | Qt.FramelessWindowHint)
+        self.setFixedWidth(360)
+        self.setStyleSheet("""
+            QFrame#silentToast {
+                background-color: #0b1120;
+                border: 1px solid #1e293b;
+                border-left: 5px solid #38bdf8;
+                border-radius: 8px;
+            }
+            QLabel {
+                background: transparent;
+            }
+        """)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(14, 12, 14, 12)
+        layout.setSpacing(6)
+
+        # Header Row
+        header_row = QHBoxLayout()
+        header_row.setSpacing(8)
+
+        icon_lbl = QLabel("🗑️")
+        icon_lbl.setFont(QFont("Segoe UI", 12))
+        header_row.addWidget(icon_lbl)
+
+        title_text = f"Deleted File Detected ({count} files)" if count > 1 else "File Deletion Detected"
+        title_lbl = QLabel(title_text)
+        title_lbl.setFont(QFont("Segoe UI", 9, QFont.Bold))
+        title_lbl.setStyleSheet("color: #f8fafc;")
+        header_row.addWidget(title_lbl, stretch=1)
+
+        close_btn = QPushButton("✕")
+        close_btn.setFixedSize(20, 20)
+        close_btn.setCursor(Qt.PointingHandCursor)
+        close_btn.setStyleSheet("""
+            QPushButton {
+                background: transparent;
+                color: #94a3b8;
+                border: none;
+                font-size: 11px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                color: #ef4444;
+            }
+        """)
+        close_btn.clicked.connect(self.dismiss)
+        header_row.addWidget(close_btn)
+        layout.addLayout(header_row)
+
+        # Filename
+        fn_lbl = QLabel(f"<b>Filename:</b> {filename}")
+        fn_lbl.setFont(QFont("Segoe UI", 9))
+        fn_lbl.setStyleSheet("color: #e2e8f0;")
+        fn_lbl.setWordWrap(True)
+        layout.addWidget(fn_lbl)
+
+        # Location
+        loc_lbl = QLabel(f"<b>Location:</b> {location}")
+        loc_lbl.setFont(QFont("Segoe UI", 8))
+        loc_lbl.setStyleSheet("color: #94a3b8;")
+        loc_lbl.setWordWrap(True)
+        layout.addWidget(loc_lbl)
+
+        # Action Button Row
+        btn_row = QHBoxLayout()
+        btn_row.addStretch()
+        view_btn = QPushButton("📂 View Deleted Files")
+        view_btn.setCursor(Qt.PointingHandCursor)
+        view_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #1e293b;
+                color: #38bdf8;
+                border: 1px solid #38bdf8;
+                border-radius: 4px;
+                padding: 4px 12px;
+                font-size: 10px;
+                font-weight: 700;
+            }
+            QPushButton:hover {
+                background-color: #38bdf8;
+                color: #0b1120;
+            }
+        """)
+        view_btn.clicked.connect(self._on_view_clicked)
+        btn_row.addWidget(view_btn)
+        layout.addLayout(btn_row)
+
+        # Auto-dismiss timer (4.5s)
+        self.timer = QTimer(self)
+        self.timer.setSingleShot(True)
+        self.timer.timeout.connect(self.dismiss)
+        self.timer.start(4500)
+
+    def _on_view_clicked(self):
+        self.view_requested.emit()
+        self.dismiss()
+
+    def dismiss(self):
+        self.timer.stop()
+        self.closed.emit()
+        self.hide()
+        self.deleteLater()
+
+
 class BeautifulRecoveryApp(QMainWindow):
     """Modern, Beautiful, State-of-the-Art Data Recovery & Auto-Recovery Suite."""
     def __init__(self):
@@ -1365,6 +1485,9 @@ class BeautifulRecoveryApp(QMainWindow):
         self.deletion_batch_timer.timeout.connect(self.process_batched_deletions)
 
         self.init_ui()
+
+        # Load and refresh deleted files from persistent storage
+        self.refresh_deleted_files_view()
 
         # Automatically start monitoring Desktop by default
         QTimer.singleShot(400, self.auto_start_default_monitor)
@@ -1416,12 +1539,16 @@ class BeautifulRecoveryApp(QMainWindow):
         self.tab_widget = QTabWidget()
         
         # STAGE 1: Real-time Folder Monitor (Intercepts deleted data)
-        tab_sentinel = self.create_sentinel_tab()
-        self.tab_widget.addTab(tab_sentinel, "Stage 1: 🛡️ Real-Time Folder Monitor")
+        self.tab_sentinel = self.create_sentinel_tab()
+        self.tab_widget.addTab(self.tab_sentinel, "Stage 1: 🛡️ Real-Time Folder Monitor")
+
+        # DELETED FILES SECTION: Silent deletion registry & manual restoration
+        self.tab_deleted = self.create_deleted_files_tab()
+        self.tab_widget.addTab(self.tab_deleted, "Stage: 🗑️ Deleted Files")
 
         # STAGE 2: Damaged Evidence File & Sector Carving (Performs corruption check & repair)
-        tab_carving = self.create_carving_tab()
-        self.tab_widget.addTab(tab_carving, "Stage 2: 🔬 Damaged File & Repair Engine")
+        self.tab_carving = self.create_carving_tab()
+        self.tab_widget.addTab(self.tab_carving, "Stage 2: 🔬 Damaged File & Repair Engine")
 
         workspace_row.addWidget(self.tab_widget, stretch=6)
 
@@ -1693,7 +1820,642 @@ class BeautifulRecoveryApp(QMainWindow):
 
         return left_card
 
-        return left_card
+    # ═════════════════════════════════════════════════════════════════════════
+    # DEDICATED STAGE: FORENSIC DELETION REGISTRY & MANUAL RESTORATION
+    # ═════════════════════════════════════════════════════════════════════════
+    def create_deleted_files_tab(self) -> QWidget:
+        del_card = QFrame()
+        del_card.setObjectName("glassCard")
+        del_layout = QVBoxLayout(del_card)
+        del_layout.setContentsMargins(18, 16, 18, 16)
+        del_layout.setSpacing(10)
+
+        # Header Section
+        header_row = QHBoxLayout()
+        header_vbox = QVBoxLayout()
+        header_vbox.setSpacing(2)
+        title_lbl = QLabel("FORENSIC DELETION REGISTRY & MANUAL RESTORATION")
+        title_lbl.setStyleSheet("color: #38bdf8; font-size: 13px; font-weight: 800; letter-spacing: 0.8px;")
+        sub_lbl = QLabel("Silent real-time deletion tracking across all drives. Manual user-directed restoration with strict SHA-256 verification.")
+        sub_lbl.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        header_vbox.addWidget(title_lbl)
+        header_vbox.addWidget(sub_lbl)
+        header_row.addLayout(header_vbox)
+        header_row.addStretch()
+
+        self.deleted_status_badge = QLabel("🛡️ SILENT SENTINEL ACTIVE")
+        self.deleted_status_badge.setStyleSheet("""
+            background-color: #062e24;
+            color: #34d399;
+            font-size: 11px;
+            font-weight: 800;
+            padding: 6px 14px;
+            border-radius: 16px;
+            border: 1px solid #059669;
+        """)
+        header_row.addWidget(self.deleted_status_badge)
+        del_layout.addLayout(header_row)
+
+        # ── 5 KPI SUMMARY CARDS ─────────────────────────────────────────────
+        kpi_grid = QHBoxLayout()
+        kpi_grid.setSpacing(8)
+
+        def _make_kpi_card(title: str, default_val: str, color: str):
+            f = QFrame()
+            f.setStyleSheet("""
+                QFrame {
+                    background-color: #0f172a;
+                    border: 1px solid #1e293b;
+                    border-radius: 8px;
+                    padding: 6px 8px;
+                }
+            """)
+            vbox = QVBoxLayout(f)
+            vbox.setContentsMargins(6, 4, 6, 4)
+            vbox.setSpacing(2)
+            t = QLabel(title)
+            t.setStyleSheet("color: #64748b; font-size: 9px; font-weight: 700; text-transform: uppercase;")
+            val = QLabel(default_val)
+            val.setStyleSheet(f"color: {color}; font-size: 16px; font-weight: 800; font-family: Consolas, monospace;")
+            val.setAlignment(Qt.AlignLeft)
+            vbox.addWidget(t)
+            vbox.addWidget(val)
+            return f, val
+
+        card_tot, self.kpi_del_total_val = _make_kpi_card("Total Deleted Files", "0", "#f43f5e")
+        card_avail, self.kpi_del_avail_val = _make_kpi_card("Available Backups", "0", "#34d399")
+        card_pend, self.kpi_del_pending_val = _make_kpi_card("Pending Restoration", "0", "#fbbf24")
+        card_rest, self.kpi_del_restored_val = _make_kpi_card("Successfully Restored", "0", "#38bdf8")
+        card_unrec, self.kpi_del_unrec_val = _make_kpi_card("Unrecoverable Files", "0", "#94a3b8")
+
+        kpi_grid.addWidget(card_tot)
+        kpi_grid.addWidget(card_avail)
+        kpi_grid.addWidget(card_pend)
+        kpi_grid.addWidget(card_rest)
+        kpi_grid.addWidget(card_unrec)
+        del_layout.addLayout(kpi_grid)
+
+        # ── FILTER & SEARCH TOOLBAR ─────────────────────────────────────────
+        filter_row = QHBoxLayout()
+        filter_row.setSpacing(8)
+
+        # Drive Filter
+        self.del_drive_combo = QComboBox()
+        self.del_drive_combo.addItem("All Drives")
+        self.del_drive_combo.setStyleSheet("""
+            QComboBox {
+                background-color: #1e293b;
+                color: #f8fafc;
+                border: 1px solid #334155;
+                border-radius: 6px;
+                padding: 4px 8px;
+                font-size: 11px;
+            }
+        """)
+        self.del_drive_combo.currentIndexChanged.connect(self.filter_deleted_files_table)
+        lbl_drv = QLabel("Drive:")
+        lbl_drv.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        filter_row.addWidget(lbl_drv)
+        filter_row.addWidget(self.del_drive_combo)
+
+        # Status Filter
+        self.del_status_combo = QComboBox()
+        self.del_status_combo.addItems([
+            "All Statuses",
+            "Available",
+            "Restored",
+            "Unavailable"
+        ])
+        self.del_status_combo.setStyleSheet("""
+            QComboBox {
+                background-color: #1e293b;
+                color: #f8fafc;
+                border: 1px solid #334155;
+                border-radius: 6px;
+                padding: 4px 8px;
+                font-size: 11px;
+            }
+        """)
+        self.del_status_combo.currentIndexChanged.connect(self.filter_deleted_files_table)
+        lbl_st = QLabel("Status:")
+        lbl_st.setStyleSheet("color: #94a3b8; font-size: 11px;")
+        filter_row.addWidget(lbl_st)
+        filter_row.addWidget(self.del_status_combo)
+
+        # Search Box
+        self.del_search_box = QLineEdit()
+        self.del_search_box.setPlaceholderText("🔍 Search by filename or extension...")
+        self.del_search_box.setStyleSheet("""
+            QLineEdit {
+                background-color: #1e293b;
+                color: #ffffff;
+                border: 1px solid #334155;
+                border-radius: 6px;
+                padding: 5px 10px;
+                font-size: 11px;
+            }
+        """)
+        self.del_search_box.textChanged.connect(self.filter_deleted_files_table)
+        filter_row.addWidget(self.del_search_box, stretch=1)
+
+        # Action Buttons
+        self.del_restore_sel_btn = QPushButton("⚡ Restore Selected")
+        self.del_restore_sel_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #0369a1;
+                color: #ffffff;
+                font-weight: 700;
+                font-size: 11px;
+                padding: 5px 12px;
+                border-radius: 6px;
+                border: 1px solid #38bdf8;
+            }
+            QPushButton:hover {
+                background-color: #0284c7;
+            }
+        """)
+        self.del_restore_sel_btn.clicked.connect(self.restore_selected_deleted_files)
+        filter_row.addWidget(self.del_restore_sel_btn)
+
+        self.del_restore_all_btn = QPushButton("⚡ Restore All Available")
+        self.del_restore_all_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #065f46;
+                color: #ffffff;
+                font-weight: 700;
+                font-size: 11px;
+                padding: 5px 12px;
+                border-radius: 6px;
+                border: 1px solid #34d399;
+            }
+            QPushButton:hover {
+                background-color: #059669;
+            }
+        """)
+        self.del_restore_all_btn.clicked.connect(self.restore_all_available_deleted_files)
+        filter_row.addWidget(self.del_restore_all_btn)
+
+        self.del_refresh_btn = QPushButton("🔄 Refresh")
+        self.del_refresh_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #1e293b;
+                color: #94a3b8;
+                font-size: 11px;
+                padding: 5px 10px;
+                border-radius: 6px;
+                border: 1px solid #334155;
+            }
+            QPushButton:hover {
+                color: #ffffff;
+                background-color: #334155;
+            }
+        """)
+        self.del_refresh_btn.clicked.connect(self.refresh_deleted_files_view)
+        filter_row.addWidget(self.del_refresh_btn)
+
+        del_layout.addLayout(filter_row)
+
+        # ── DELETED FILES DATA TABLE ────────────────────────────────────────
+        self.deleted_table = QTableWidget(0, 8)
+        self.deleted_table.setHorizontalHeaderLabels([
+            "Select", "Filename", "Original Location", "Drive", "Size", "Deleted At", "Backup Status", "Action"
+        ])
+        self.deleted_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        self.deleted_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.deleted_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
+        self.deleted_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.deleted_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.deleted_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        self.deleted_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        self.deleted_table.horizontalHeader().setSectionResizeMode(7, QHeaderView.ResizeToContents)
+        self.deleted_table.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.deleted_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.deleted_table.setStyleSheet("""
+            QTableWidget {
+                background-color: #0b1120;
+                gridline-color: #1e293b;
+                border: 1px solid #1e293b;
+                border-radius: 6px;
+                font-size: 11px;
+            }
+            QHeaderView::section {
+                background-color: #0f172a;
+                color: #94a3b8;
+                font-weight: 700;
+                font-size: 11px;
+                border: 1px solid #1e293b;
+                padding: 4px;
+            }
+        """)
+        del_layout.addWidget(self.deleted_table, stretch=1)
+
+        # Select all / Deselect all row
+        sel_row = QHBoxLayout()
+        sel_all_btn = QPushButton("Select All Available")
+        sel_all_btn.setStyleSheet("background: transparent; color: #38bdf8; border: none; font-size: 10px; font-weight: bold;")
+        sel_all_btn.clicked.connect(self.select_all_available_in_table)
+        desel_all_btn = QPushButton("Deselect All")
+        desel_all_btn.setStyleSheet("background: transparent; color: #94a3b8; border: none; font-size: 10px;")
+        desel_all_btn.clicked.connect(self.deselect_all_in_table)
+        sel_row.addWidget(sel_all_btn)
+        sel_row.addWidget(desel_all_btn)
+        sel_row.addStretch()
+        
+        self.del_count_summary_lbl = QLabel("Showing 0 deleted files")
+        self.del_count_summary_lbl.setStyleSheet("color: #64748b; font-size: 10px;")
+        sel_row.addWidget(self.del_count_summary_lbl)
+        del_layout.addLayout(sel_row)
+
+        return del_card
+
+    def refresh_deleted_files_view(self):
+        """Refreshes KPI metrics and re-populates the deleted files table."""
+        stats = DeletedFilesManager.get_stats()
+        if hasattr(self, "kpi_del_total_val"):
+            self.kpi_del_total_val.setText(str(stats["total_deleted"]))
+            self.kpi_del_avail_val.setText(str(stats["available_backups"]))
+            self.kpi_del_pending_val.setText(str(stats["pending_restoration"]))
+            self.kpi_del_restored_val.setText(str(stats["successfully_restored"]))
+            self.kpi_del_unrec_val.setText(str(stats["unrecoverable_files"]))
+
+            # Dynamically sync storage drives into filter combo
+            current_selected = self.del_drive_combo.currentText()
+            self.del_drive_combo.blockSignals(True)
+            self.del_drive_combo.clear()
+            self.del_drive_combo.addItem("All Drives")
+            for drv in stats.get("drives", []):
+                self.del_drive_combo.addItem(drv)
+            idx = self.del_drive_combo.findText(current_selected)
+            if idx >= 0:
+                self.del_drive_combo.setCurrentIndex(idx)
+            self.del_drive_combo.blockSignals(False)
+
+        self.filter_deleted_files_table()
+
+    def filter_deleted_files_table(self):
+        """Filters and populates the Deleted Files table based on drive, status, and search query."""
+        if not hasattr(self, "deleted_table"):
+            return
+
+        all_recs = DeletedFilesManager.get_all_records()
+        selected_drive = self.del_drive_combo.currentText() if hasattr(self, "del_drive_combo") else "All Drives"
+        selected_status = self.del_status_combo.currentText() if hasattr(self, "del_status_combo") else "All Statuses"
+        search_query = self.del_search_box.text().strip().lower() if hasattr(self, "del_search_box") else ""
+
+        filtered_recs: List[DeletedFileRecord] = []
+        for r in all_recs:
+            # Drive filter
+            if selected_drive != "All Drives":
+                if r.source_drive.upper() != selected_drive.upper() and not r.original_path.upper().startswith(selected_drive.upper()):
+                    continue
+
+            # Status filter
+            if selected_status == "Available":
+                if r.status not in ("Backup Available", "Backup Verified", "Awaiting Manual Restoration", "Original Location Occupied"):
+                    continue
+            elif selected_status == "Restored":
+                if r.status != "Restored":
+                    continue
+            elif selected_status == "Unavailable":
+                if r.status not in ("Recovery Unavailable", "Backup Corrupted"):
+                    continue
+
+            # Search text query
+            if search_query:
+                q = search_query
+                match = (q in r.filename.lower() or 
+                         q in r.file_extension.lower() or 
+                         q in r.original_path.lower() or 
+                         q in r.source_drive.lower())
+                if not match:
+                    continue
+
+            filtered_recs.append(r)
+
+        self.deleted_table.setRowCount(0)
+        for r in filtered_recs:
+            row = self.deleted_table.rowCount()
+            self.deleted_table.insertRow(row)
+
+            # Col 0: Checkbox
+            cb_container = QWidget()
+            cb_layout = QHBoxLayout(cb_container)
+            cb_layout.setContentsMargins(6, 0, 6, 0)
+            cb_layout.setAlignment(Qt.AlignCenter)
+            cb = QCheckBox()
+            cb.setProperty("event_id", r.event_id)
+            can_restore = r.status in ("Backup Available", "Backup Verified", "Awaiting Manual Restoration", "Original Location Occupied")
+            cb.setEnabled(can_restore)
+            cb_layout.addWidget(cb)
+            self.deleted_table.setCellWidget(row, 0, cb_container)
+
+            # Col 1: Filename
+            fn_item = QTableWidgetItem(r.filename)
+            fn_item.setFont(QFont("Segoe UI", 9, QFont.Bold))
+            fn_item.setForeground(QBrush(QColor("#f8fafc")))
+            self.deleted_table.setItem(row, 1, fn_item)
+
+            # Col 2: Original Location
+            loc_item = QTableWidgetItem(r.original_path)
+            loc_item.setForeground(QBrush(QColor("#94a3b8")))
+            self.deleted_table.setItem(row, 2, loc_item)
+
+            # Col 3: Drive
+            drv_item = QTableWidgetItem(r.source_drive)
+            drv_item.setForeground(QBrush(QColor("#38bdf8")))
+            drv_item.setTextAlignment(Qt.AlignCenter)
+            self.deleted_table.setItem(row, 3, drv_item)
+
+            # Col 4: Size
+            sz_item = QTableWidgetItem(r.size_formatted)
+            sz_item.setForeground(QBrush(QColor("#cbd5e1")))
+            sz_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            self.deleted_table.setItem(row, 4, sz_item)
+
+            # Col 5: Deleted At
+            del_item = QTableWidgetItem(r.deletion_timestamp)
+            del_item.setForeground(QBrush(QColor("#94a3b8")))
+            del_item.setTextAlignment(Qt.AlignCenter)
+            self.deleted_table.setItem(row, 5, del_item)
+
+            # Col 6: Backup Status Badge
+            st_item = QTableWidgetItem(r.status)
+            st_item.setTextAlignment(Qt.AlignCenter)
+            if r.status in ("Backup Available", "Backup Verified"):
+                st_item.setForeground(QBrush(QColor("#34d399")))
+                st_item.setText(f"✓ {r.status}")
+            elif r.status == "Restored":
+                st_item.setForeground(QBrush(QColor("#38bdf8")))
+                st_item.setText("✓ Restored")
+            elif r.status == "Original Location Occupied":
+                st_item.setForeground(QBrush(QColor("#f59e0b")))
+                st_item.setText("⚠️ Location Occupied")
+            elif r.status in ("Recovery Unavailable", "Backup Corrupted"):
+                st_item.setForeground(QBrush(QColor("#ef4444")))
+                st_item.setText(f"✕ {r.status}")
+            else:
+                st_item.setForeground(QBrush(QColor("#fbbf24")))
+                st_item.setText(f"⏳ {r.status}")
+            self.deleted_table.setItem(row, 6, st_item)
+
+            # Col 7: Action Button
+            btn_container = QWidget()
+            btn_layout = QHBoxLayout(btn_container)
+            btn_layout.setContentsMargins(4, 2, 4, 2)
+            btn_layout.setAlignment(Qt.AlignCenter)
+
+            if r.status == "Restored":
+                act_btn = QPushButton("✓ Restored")
+                act_btn.setEnabled(False)
+                act_btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #064e3b;
+                        color: #34d399;
+                        font-size: 10px;
+                        font-weight: bold;
+                        border-radius: 4px;
+                        padding: 3px 8px;
+                        border: 1px solid #059669;
+                    }
+                """)
+            elif r.status in ("Recovery Unavailable", "Backup Corrupted"):
+                act_btn = QPushButton("🔬 Scan Disk")
+                act_btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #1e293b;
+                        color: #94a3b8;
+                        font-size: 10px;
+                        border-radius: 4px;
+                        padding: 3px 8px;
+                        border: 1px solid #334155;
+                    }
+                    QPushButton:hover {
+                        color: #ffffff;
+                        background-color: #334155;
+                    }
+                """)
+                act_btn.clicked.connect(lambda _, p=r.original_path: self.on_scan_disk_for_file(p))
+            else:
+                act_btn = QPushButton("⚡ Restore")
+                act_btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #0369a1;
+                        color: #ffffff;
+                        font-size: 10px;
+                        font-weight: bold;
+                        border-radius: 4px;
+                        padding: 3px 10px;
+                        border: 1px solid #38bdf8;
+                    }
+                    QPushButton:hover {
+                        background-color: #0284c7;
+                    }
+                """)
+                act_btn.clicked.connect(lambda _, eid=r.event_id: self.restore_single_deleted_file(eid))
+
+            btn_layout.addWidget(act_btn)
+            self.deleted_table.setCellWidget(row, 7, btn_container)
+
+        if hasattr(self, "del_count_summary_lbl"):
+            self.del_count_summary_lbl.setText(f"Showing {len(filtered_recs)} of {len(all_recs)} deleted files")
+
+    def select_all_available_in_table(self):
+        """Checks all eligible checkboxes in the deleted files table."""
+        for row in range(self.deleted_table.rowCount()):
+            w = self.deleted_table.cellWidget(row, 0)
+            if w:
+                cb = w.findChild(QCheckBox)
+                if cb and cb.isEnabled():
+                    cb.setChecked(True)
+
+    def deselect_all_in_table(self):
+        """Unchecks all checkboxes in the deleted files table."""
+        for row in range(self.deleted_table.rowCount()):
+            w = self.deleted_table.cellWidget(row, 0)
+            if w:
+                cb = w.findChild(QCheckBox)
+                if cb:
+                    cb.setChecked(False)
+
+    def restore_single_deleted_file(self, event_id: str):
+        """
+        Manually restores a single file from the Deleted Files table.
+        Verifies SHA-256 against Shadow Vault and detects destination collisions.
+        """
+        record = DeletedFilesManager.get_record(event_id)
+        if not record:
+            QMessageBox.warning(self, "Record Not Found", "The requested deleted file record was not found.")
+            return
+
+        target_path = Path(record.original_path)
+        if target_path.exists():
+            msg_box = QMessageBox(self)
+            msg_box.setWindowTitle("Destination Conflict")
+            msg_box.setIcon(QMessageBox.Question)
+            msg_box.setText(f"A file already exists at original location:\n\n{target_path}\n\nHow would you like to proceed?")
+            btn_overwrite = msg_box.addButton("Overwrite Existing", QMessageBox.AcceptRole)
+            btn_alt = msg_box.addButton("Choose Alternative Location...", QMessageBox.ActionRole)
+            btn_cancel = msg_box.addButton("Cancel", QMessageBox.RejectRole)
+            msg_box.setDefaultButton(btn_alt)
+            msg_box.setStyleSheet("""
+                QMessageBox { background-color: #0f172a; color: #ffffff; }
+                QLabel { color: #ffffff; }
+                QPushButton { background-color: #1e293b; color: #ffffff; border: 1px solid #334155; padding: 6px 14px; border-radius: 6px; }
+                QPushButton:hover { background-color: #334155; }
+            """)
+            msg_box.exec_()
+
+            clicked = msg_box.clickedButton()
+            if clicked == btn_overwrite:
+                ok, msg = DeletedFilesManager.restore_record(record, overwrite=True)
+            elif clicked == btn_alt:
+                ext_filter = f"{record.file_extension.upper()} Files (*.{record.file_extension});;All Files (*.*)" if record.file_extension else "All Files (*.*)"
+                chosen, _ = QFileDialog.getSaveFileName(self, "Choose Safe Destination", str(target_path), ext_filter)
+                if not chosen:
+                    return
+                ok, msg = DeletedFilesManager.restore_record(record, custom_dest=chosen, overwrite=True)
+            else:
+                return
+        else:
+            ok, msg = DeletedFilesManager.restore_record(record, overwrite=False)
+
+        if ok:
+            self.console_log.append(f"[Manual Restoration] ✓ {record.filename}: {msg}")
+            self.refresh_deleted_files_view()
+            rec_dict = record.to_dict()
+            rec_dict["restored_to"] = record.restored_to or str(target_path)
+            rec_dict["path"] = record.restored_to or str(target_path)
+            rec_dict["name"] = record.filename
+            self.display_recovery_showcase(rec_dict)
+            QMessageBox.information(
+                self, "File Restored",
+                f"File '{record.filename}' was successfully restored!\n\nLocation: {record.restored_to or target_path}\nVerification: 100% SHA-256 Validated."
+            )
+        else:
+            self.console_log.append(f"[Manual Restoration Failed] ✕ {record.filename}: {msg}")
+            self.refresh_deleted_files_view()
+            QMessageBox.critical(self, "Restoration Failed", f"Could not restore '{record.filename}':\n\n{msg}")
+
+    def restore_selected_deleted_files(self):
+        """Restores all selected checked records from the table with safety checks."""
+        selected_ids = []
+        for row in range(self.deleted_table.rowCount()):
+            w = self.deleted_table.cellWidget(row, 0)
+            if w:
+                cb = w.findChild(QCheckBox)
+                if cb and cb.isChecked():
+                    eid = cb.property("event_id")
+                    if eid:
+                        selected_ids.append(eid)
+
+        if not selected_ids:
+            QMessageBox.information(self, "No Files Selected", "Please select at least one file to restore using the checkboxes.")
+            return
+
+        success_count = 0
+        fail_count = 0
+        occupied_count = 0
+
+        for eid in selected_ids:
+            rec = DeletedFilesManager.get_record(eid)
+            if not rec or rec.status == "Restored":
+                continue
+            ok, msg = DeletedFilesManager.restore_record(rec, overwrite=False)
+            if ok:
+                success_count += 1
+            elif msg == "OCCUPIED":
+                occupied_count += 1
+            else:
+                fail_count += 1
+
+        self.refresh_deleted_files_view()
+        summary = f"Batch Restoration Complete:\n\n✓ Restored: {success_count} file(s)\n"
+        if occupied_count > 0:
+            summary += f"⚠️ Destination Occupied: {occupied_count} file(s) (Use individual restore to overwrite or choose location)\n"
+        if fail_count > 0:
+            summary += f"✕ Failed / Unavailable: {fail_count} file(s)\n"
+        QMessageBox.information(self, "Restoration Summary", summary)
+
+    def restore_all_available_deleted_files(self):
+        """Restores all available files with authentic backups without silent overwriting."""
+        recs = DeletedFilesManager.get_all_records()
+        available_recs = [
+            r for r in recs 
+            if r.status in ("Backup Available", "Backup Verified", "Awaiting Manual Restoration", "Original Location Occupied")
+        ]
+        if not available_recs:
+            QMessageBox.information(self, "No Backups Available", "There are no deleted files currently eligible for restoration.")
+            return
+
+        reply = QMessageBox.question(
+            self, "Restore All Available Files",
+            f"Are you sure you want to restore all {len(available_recs)} available files?\n\nFiles with destination conflicts will be kept safe and not overwritten.",
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        success_count = 0
+        fail_count = 0
+        occupied_count = 0
+
+        for rec in available_recs:
+            ok, msg = DeletedFilesManager.restore_record(rec, overwrite=False)
+            if ok:
+                success_count += 1
+            elif msg == "OCCUPIED":
+                occupied_count += 1
+            else:
+                fail_count += 1
+
+        self.refresh_deleted_files_view()
+        summary = f"Restore All Complete:\n\n✓ Successfully Restored: {success_count} file(s)\n"
+        if occupied_count > 0:
+            summary += f"⚠️ Destination Occupied: {occupied_count} file(s) (Preserved without overwrite)\n"
+        if fail_count > 0:
+            summary += f"✕ Unavailable / Corrupt: {fail_count} file(s)\n"
+        QMessageBox.information(self, "Restoration Results", summary)
+
+    def on_scan_disk_for_file(self, path: str):
+        """Switches to Stage 2 Carving tab and prepares for deep forensic scan."""
+        if hasattr(self, "tab_carving"):
+            self.tab_widget.setCurrentWidget(self.tab_carving)
+            if hasattr(self, "file_path_input") and path:
+                self.file_path_input.setText(path)
+
+    def show_deletion_toast(self, filename: str, location: str, count: int = 1):
+        """Displays a small, non-blocking toast in the bottom-right corner."""
+        if hasattr(self, "_active_toast") and self._active_toast:
+            try:
+                self._active_toast.dismiss()
+            except Exception:
+                pass
+        toast = SilentToastNotification(self, filename, location, count)
+        toast.view_requested.connect(self.navigate_to_deleted_files)
+        toast.adjustSize()
+        margin_x = 24
+        margin_y = 36
+        x = max(10, self.width() - toast.width() - margin_x)
+        y = max(10, self.height() - toast.height() - margin_y)
+        toast.move(x, y)
+        toast.show()
+        toast.raise_()
+        self._active_toast = toast
+
+    def navigate_to_deleted_files(self):
+        """Navigates to the Deleted Files tab and refreshes its view."""
+        if hasattr(self, "tab_deleted"):
+            self.tab_widget.setCurrentWidget(self.tab_deleted)
+            self.refresh_deleted_files_view()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "_active_toast") and self._active_toast and self._active_toast.isVisible():
+            margin_x = 24
+            margin_y = 36
+            x = max(10, self.width() - self._active_toast.width() - margin_x)
+            y = max(10, self.height() - self._active_toast.height() - margin_y)
+            self._active_toast.move(x, y)
 
     # ═════════════════════════════════════════════════════════════════════════
     # STAGE 2: DAMAGED FILE & SECTOR CARVING REPAIR ENGINE
@@ -2252,7 +3014,11 @@ class BeautifulRecoveryApp(QMainWindow):
         self.deletion_batch_timer.start(250)
 
     def process_batched_deletions(self):
-        """Processes collected deletion events for single or multiple files."""
+        """
+        Processes collected deletion events silently.
+        NO modal popups, NO permission interruptions, NO auto-restoration.
+        Emits non-blocking corner toast and updates the Deleted Files section.
+        """
         if not self.pending_deletions:
             return
 
@@ -2261,11 +3027,18 @@ class BeautifulRecoveryApp(QMainWindow):
         self.last_deleted_batch = batch
         count = len(batch)
 
-        # Update alert card on main screen
+        # Ensure all items in batch are recorded in DeletedFilesManager
+        for it in batch:
+            try:
+                DeletedFilesManager.record_deletion(it)
+            except Exception:
+                pass
+
+        # Update alert card on Stage 1 screen (informational, non-blocking)
         self.deletion_alert_frame.setObjectName("alertCard")
         self.deletion_alert_frame.setStyleSheet("""
-            background-color: #2b0b14;
-            border: 2px solid #ef4444;
+            background-color: #172033;
+            border: 2px solid #38bdf8;
             border-radius: 14px;
         """)
 
@@ -2277,48 +3050,38 @@ class BeautifulRecoveryApp(QMainWindow):
             is_photo = item.get("is_photo", False) or fn.lower().endswith((".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif"))
             sz = item.get("size", 0)
             sz_str = f"{sz / 1024:.1f} KB" if sz < 1024 * 1024 else f"{sz / (1024 * 1024):.1f} MB"
-            self.alert_badge.setText("⚠️ DELETED FILE • PERMISSION REQUIRED")
+            self.alert_badge.setText("🗑️ DELETED FILE DETECTED • SILENTLY RECORDED")
+            self.alert_badge.setStyleSheet("color: #38bdf8; font-size: 11px; font-weight: 800;")
             self.alert_icon_lbl.setText("🖼️" if is_photo else "📄")
             self.alert_name_lbl.setText(f"File: {fn}")
             self.alert_path_lbl.setText(f"Original Path: {orig_path} ({sz_str})")
-            self.alert_recover_btn.setText("⚡ Yes, Recover to Same Path")
+            self.alert_recover_btn.setText("📂 View Deleted Files")
         else:
             names_preview = ", ".join([f.get("name", "") for f in batch[:3]])
             if count > 3:
                 names_preview += f" (+{count - 3} more)"
-            self.alert_badge.setText(f"⚠️ {count} DELETED FILES DETECTED • BATCH RECOVERY")
+            self.alert_badge.setText(f"🗑️ {count} DELETED FILES DETECTED • SILENTLY RECORDED")
+            self.alert_badge.setStyleSheet("color: #38bdf8; font-size: 11px; font-weight: 800;")
             self.alert_icon_lbl.setText("📁")
             self.alert_name_lbl.setText(f"{count} Files Deleted: {names_preview}")
-            self.alert_path_lbl.setText(f"Click below to review and restore all {count} files to their original paths.")
-            self.alert_recover_btn.setText(f"⚡ Recover {count} Files to Same Path")
+            self.alert_path_lbl.setText("Logged to Deleted Files section. User can review and restore anytime.")
+            self.alert_recover_btn.setText(f"📂 View Deleted Files ({count})")
 
         self.alert_recover_btn.setVisible(True)
-        self.alert_deny_btn.setVisible(True)
-        self.status_badge.setText(f"🔴 PERMISSION REQUIRED ({count} ITEMS)")
-        self.status_badge.setStyleSheet("color: #f59e0b; font-size: 11px; font-weight: 800;")
+        self.alert_deny_btn.setVisible(False)
+        self.status_badge.setText(f"🟡 {count} DELETED FILE(S) LOGGED")
+        self.status_badge.setStyleSheet("color: #38bdf8; font-size: 11px; font-weight: 800;")
 
-        # Auto-recover path if enabled
-        if self.auto_recover_chk.isChecked():
-            self.console_log.append(f"[Auto-Recover] Auto-recovering batch of {count} files to same path...")
-            self.recover_batch_to_same_path(batch)
-            return
+        first_item = batch[0]
+        first_fn = first_item.get("name", "")
+        first_dir = first_item.get("directory", str(Path(first_item.get("full_path", "")).parent))
+        self.console_log.append(f"[Silent Sentinel] Silently recorded {count} deleted file(s) into Deleted Files section without interruption.")
 
-        # If permission required, open adjustable dialog
-        self.console_log.append(f"[Permission Required] Prompting user for {count} deleted file(s)...")
-        dlg = AdjustableBatchPermissionDialog(self, items=batch)
-        if dlg.exec_() == QDialog.Accepted:
-            selected_items = dlg.get_selected_items()
-            if selected_items:
-                self.console_log.append(f"[Permission Granted] User approved recovery for {len(selected_items)} files.")
-                self.recover_batch_to_same_path(selected_items)
-            else:
-                self.console_log.append("[Permission Cancelled] No files selected.")
-        else:
-            self.console_log.append(f"[Permission Denied] User chose to keep {count} files deleted.")
-            self.alert_badge.setText("✕ RECOVERY CANCELLED (Kept Deleted)")
-            self.alert_badge.setStyleSheet("color: #94a3b8; font-size: 12px; font-weight: 700;")
-            self.status_badge.setText("READY")
-            self.status_badge.setStyleSheet("color: #64748b; font-size: 11px; font-weight: 700;")
+        # Show non-blocking floating toast notification
+        self.show_deletion_toast(first_fn, first_dir, count)
+
+        # Refresh the Deleted Files section
+        self.refresh_deleted_files_view()
 
     def recover_batch_to_same_path(self, items: List[dict]):
         """Recovers multiple items, updating progress and displaying adjustable completion results."""
@@ -2401,20 +3164,14 @@ class BeautifulRecoveryApp(QMainWindow):
         # Pass file to Stage 2: Damaged File Section & execute repair operation
         if dest and os.path.exists(dest):
             self.set_carve_selected_file(dest)
-            self.tab_widget.setCurrentIndex(1)  # Make Stage 2 active
+            self.tab_widget.setCurrentWidget(self.tab_carving)  # Make Stage 2 active
             self.start_carve_recovery()          # Run corruption scan & reconstruction operation!
         else:
             self.display_recovery_showcase(rec_info)
 
     def on_alert_recover_clicked(self):
-        """User clicked 'Recover to Same Path' on the alert card."""
-        if getattr(self, "last_deleted_batch", None) and len(self.last_deleted_batch) > 1:
-            self.recover_batch_to_same_path(self.last_deleted_batch)
-        elif self.last_deleted_info:
-            fn = self.last_deleted_info.get("name")
-            d = self.last_deleted_info.get("directory")
-            if fn and d:
-                self.recover_file_to_same_path(fn, d)
+        """User clicked 'View Deleted Files' on the alert card."""
+        self.navigate_to_deleted_files()
 
     def recover_file_to_same_path(self, filename: str, directory: str):
         """Recover deleted file directly into its original folder."""

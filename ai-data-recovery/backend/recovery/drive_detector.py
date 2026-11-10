@@ -190,3 +190,4 @@ class StorageDeviceDetector:
                 ))
 
         return devices
+
