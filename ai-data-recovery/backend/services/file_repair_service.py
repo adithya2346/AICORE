@@ -159,6 +159,25 @@ class FileRepairService:
 
         return "binary"
 
+    def diagnose(self, data: bytes, filename: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Runs structural diagnosis using the authoritative FalconDataRescue engine.
+        """
+        try:
+            from backend.services.falcon_recovery_bridge import diagnose_damaged_file
+            fn = filename or "sample.bin"
+            return diagnose_damaged_file(fn, data)
+        except Exception as exc:
+            logger.warning(f"Falcon diagnosis error: {exc}")
+            return {
+                "file_name": filename or "unknown",
+                "size_bytes": len(data),
+                "status": "error",
+                "damage_score": 100,
+                "issues": [str(exc)],
+                "repairable": False
+            }
+
     def repair(
         self,
         data: bytes,
@@ -166,10 +185,53 @@ class FileRepairService:
         format_hint: Optional[str] = None
     ) -> RepairReport:
         """
-        Executes structural corruption repair for the determined file format.
+        Executes structural corruption repair using the authoritative FalconDataRescue engine.
+        Strict Forensic Principle: FABRICATED_BYTES = 0.
         """
-        fmt = self.detect_file_type(data, filename=filename, format_hint=format_hint)
+        fn = filename or f"file.{format_hint or 'bin'}"
+        fmt = self.detect_file_type(data, filename=fn, format_hint=format_hint)
 
+        # 1. Authoritative FalconDataRescue forensic recovery
+        try:
+            from backend.services.falcon_recovery_bridge import recover_damaged_file
+            repaired_bytes, falcon_report = recover_damaged_file(fn, data)
+            status = falcon_report.get("status", "")
+
+            # If Falcon recovered or modified the file
+            if repaired_bytes != data and status in ("VALIDATED_REPAIR", "PARTIAL_RECOVERY"):
+                # Check if JPEG container markers were restored
+                is_valid_jpeg = fmt in ("jpeg", "jpg") and repaired_bytes.startswith(b"\xFF\xD8") and repaired_bytes.endswith(b"\xFF\xD9")
+
+                # Check if ZIP needs central directory reconstruction
+                if fmt in ("zip", "docx", "xlsx", "pptx"):
+                    try:
+                        with zipfile.ZipFile(io.BytesIO(repaired_bytes)) as z:
+                            if not z.namelist() and b"PK\x03\x04" in data:
+                                return self.repair_zip(data, filename, fmt)
+                    except Exception:
+                        return self.repair_zip(data, filename, fmt)
+
+                success = (status != "FAILED_RECOVERY") or is_valid_jpeg
+                mods = falcon_report.get("operations", falcon_report.get("repair_actions", []))
+                if not mods:
+                    mods = [f"Forensic restoration applied via FalconDataRescue ({status})."]
+                return RepairReport(
+                    success=success,
+                    file_type=falcon_report.get("format", fmt),
+                    repaired_bytes=repaired_bytes,
+                    modifications=mods,
+                    corruption_detected=True,
+                    corruption_percentage=float(falcon_report.get("damage_score", 25.0)),
+                    integrity_score=float(falcon_report.get("integrity_score", falcon_report.get("confidence", 90.0))),
+                    confidence_score=float(falcon_report.get("confidence", 90.0)),
+                    is_valid=success,
+                    details=falcon_report,
+                    preview_snippet=falcon_report.get("preview_markdown")
+                )
+        except Exception as exc:
+            logger.warning(f"Falcon recovery bridge error: {exc}")
+
+        # 2. Structural handlers for formats or cases not modified by Falcon
         if fmt in ("jpeg", "jpg"):
             return self.repair_jpeg(data, filename)
         elif fmt == "png":
