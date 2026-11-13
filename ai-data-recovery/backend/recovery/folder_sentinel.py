@@ -51,7 +51,53 @@ EXCLUDED_DIR_NAMES = {
     "pagefile.sys",
     "swapfile.sys",
     "dumpstack.log",
+    "appdata",
+    "node_modules",
+    ".git",
+    ".svn",
+    ".hg",
+    "__pycache__",
+    ".cache",
+    ".vscode",
+    ".idea",
+    "temp",
+    "tmp",
+    "cache",
+    "logs",
+    "package-cache",
+    "recovery_workspace",
 }
+
+EXCLUDED_EXTENSIONS = {
+    ".tmp", ".log", ".crdownload", ".part", ".cache", ".dat",
+    ".lock", ".swp", ".ldb", ".journal", ".bak", ".etl", ".evtx",
+    ".db-shm", ".db-wal"
+}
+
+
+def is_path_excluded(path: Path, watch_root: Optional[Path] = None) -> bool:
+    """Fast check whether a file or directory is temporary, system noise, or internal cache."""
+    try:
+        name = path.name.lower()
+        if name.startswith("~$"):
+            return True
+        for ext in EXCLUDED_EXTENSIONS:
+            if name.endswith(ext):
+                return True
+        if watch_root:
+            try:
+                rel = path.relative_to(watch_root)
+                parts = {p.lower() for p in rel.parts}
+            except Exception:
+                parts = {p.lower() for p in path.parts}
+        else:
+            parts = {p.lower() for p in path.parts}
+
+        if any(ex in parts for ex in EXCLUDED_DIR_NAMES):
+            return True
+    except Exception:
+        pass
+    return False
 
 
 class VaultEntry:
@@ -104,28 +150,51 @@ class FolderVault:
     """
     Forensic local shadow vault storing file replicas for instant zero-loss auto-recovery.
     Strict Forensic Principle: FABRICATED_BYTES = 0.
+    Includes in-memory cache and debounced writes to prevent system overload during bursts.
     """
     _lock = threading.Lock()
+    _index_cache: Optional[Dict[str, Dict[str, Any]]] = None
+    _dirty: bool = False
+    _last_save_time: float = 0.0
 
     @classmethod
     def load_index(cls) -> Dict[str, Dict[str, Any]]:
         with cls._lock:
+            if cls._index_cache is not None:
+                return dict(cls._index_cache)
             if INDEX_FILE.exists():
                 try:
                     with open(INDEX_FILE, "r", encoding="utf-8") as f:
-                        return json.load(f)
+                        cls._index_cache = json.load(f)
+                        return dict(cls._index_cache)
                 except Exception:
-                    return {}
-            return {}
+                    cls._index_cache = {}
+            else:
+                cls._index_cache = {}
+            return dict(cls._index_cache)
 
     @classmethod
-    def save_index(cls, data: Dict[str, Dict[str, Any]]):
+    def save_index(cls, data: Dict[str, Dict[str, Any]], force: bool = False):
         with cls._lock:
-            try:
-                with open(INDEX_FILE, "w", encoding="utf-8") as f:
-                    json.dump(data, f, indent=2)
-            except Exception:
-                pass
+            cls._index_cache = dict(data)
+            cls._dirty = True
+            now = time.time()
+            if force or (now - cls._last_save_time >= 1.0):
+                cls._flush_index_to_disk()
+
+    @classmethod
+    def _flush_index_to_disk(cls):
+        if cls._index_cache is None or not cls._dirty:
+            return
+        try:
+            temp_file = INDEX_FILE.with_suffix(".tmp")
+            with open(temp_file, "w", encoding="utf-8") as f:
+                json.dump(cls._index_cache, f, indent=2)
+            temp_file.replace(INDEX_FILE)
+            cls._dirty = False
+            cls._last_save_time = time.time()
+        except Exception:
+            pass
 
     @classmethod
     def store_file(cls, file_path: Path) -> Optional[VaultEntry]:
@@ -235,20 +304,23 @@ class FolderVault:
 
     @classmethod
     def get_vault_stats(cls) -> Dict[str, Any]:
-        idx = cls.load_index()
-        total_files = len(idx)
-        total_size = sum(e.get("size", 0) for e in idx.values())
-        by_drive: Dict[str, int] = {}
-        for e in idx.values():
-            drv = e.get("drive_letter", "Unknown").upper()
-            by_drive[drv] = by_drive.get(drv, 0) + 1
+        with cls._lock:
+            if cls._index_cache is None:
+                cls.load_index()
+            idx = cls._index_cache or {}
+            total_files = len(idx)
+            total_size = sum(e.get("size", 0) for e in idx.values())
+            by_drive: Dict[str, int] = {}
+            for e in idx.values():
+                drv = e.get("drive_letter", "Unknown").upper()
+                by_drive[drv] = by_drive.get(drv, 0) + 1
 
-        return {
-            "total_files_protected": total_files,
-            "total_size_bytes": total_size,
-            "total_size_mb": round(total_size / (1024 * 1024), 2),
-            "distribution_by_drive": by_drive,
-        }
+            return {
+                "total_files_protected": total_files,
+                "total_size_bytes": total_size,
+                "total_size_mb": round(total_size / (1024 * 1024), 2),
+                "distribution_by_drive": by_drive,
+            }
 
 
 class FolderAnalyzer:
@@ -434,10 +506,12 @@ class DriveSentinelWatcher:
             for target in targets:
                 try:
                     for root, dirs, files in os.walk(target):
-                        # Filter out excluded system directories
-                        dirs[:] = [d for d in dirs if d.lower() not in EXCLUDED_DIR_NAMES]
+                        # Filter out excluded system directories and noisy caches
+                        dirs[:] = [d for d in dirs if not is_path_excluded(Path(root) / d, watch_root=target)]
                         for f in files:
                             fp = Path(root) / f
+                            if is_path_excluded(fp, watch_root=target):
+                                continue
                             try:
                                 mtime = fp.stat().st_mtime
                                 self._known_files[str(fp.resolve()).lower()] = mtime
@@ -555,12 +629,9 @@ class DriveSentinelWatcher:
     def _handle_change_action(self, parent_dir: Path, action: int, rel_path: str):
         """Processes change events from ReadDirectoryChangesW."""
         full_path = parent_dir / rel_path
-        norm_key = str(full_path.resolve()).lower()
-
-        # Filter out system and temporary file noise
-        name = full_path.name.lower()
-        if name in EXCLUDED_DIR_NAMES or name.startswith("~$") or name.endswith(".tmp"):
+        if is_path_excluded(full_path, watch_root=parent_dir):
             return
+        norm_key = str(full_path.resolve()).lower()
 
         if action == 1:  # FILE_ACTION_ADDED
             self._known_files[norm_key] = time.time()
@@ -577,11 +648,14 @@ class DriveSentinelWatcher:
         elif action == 3:  # FILE_ACTION_MODIFIED
             if full_path.is_file():
                 try:
-                    self._known_files[norm_key] = full_path.stat().st_mtime
-                    FolderVault.store_file(full_path)
+                    mtime = full_path.stat().st_mtime
+                    last_mtime = self._known_files.get(norm_key, 0.0)
+                    if mtime - last_mtime >= 1.5:
+                        self._known_files[norm_key] = mtime
+                        FolderVault.store_file(full_path)
+                        self._dispatch_event("modified", full_path)
                 except Exception:
                     pass
-            self._dispatch_event("modified", full_path)
 
         elif action in (4, 5):  # RENAMED
             act_type = "renamed_old" if action == 4 else "renamed_new"

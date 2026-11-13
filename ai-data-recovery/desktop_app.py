@@ -548,12 +548,17 @@ class SentinelThread(QThread):
         self.drives_updated.emit([d.to_dict() for d in self.manager.known_devices.values()])
         self.stats_updated.emit(self.manager.get_system_stats())
 
+        last_drives_sig = ""
         while self._is_running:
-            self.msleep(1000)
+            self.msleep(1500)
             if self.manager and self._is_running:
                 try:
                     self.stats_updated.emit(self.manager.get_system_stats())
-                    self.drives_updated.emit([d.to_dict() for d in self.manager.known_devices.values()])
+                    curr_drives = [d.to_dict() for d in self.manager.known_devices.values()]
+                    d_sig = f"{len(curr_drives)}:{[(d.get('drive_letter'), d.get('status')) for d in curr_drives]}"
+                    if d_sig != last_drives_sig:
+                        last_drives_sig = d_sig
+                        self.drives_updated.emit(curr_drives)
                 except Exception:
                     pass
 
@@ -1484,6 +1489,11 @@ class BeautifulRecoveryApp(QMainWindow):
         self.deletion_batch_timer.setSingleShot(True)
         self.deletion_batch_timer.timeout.connect(self.process_batched_deletions)
 
+        self.pending_file_events: List[dict] = []
+        self.file_event_batch_timer = QTimer(self)
+        self.file_event_batch_timer.setSingleShot(True)
+        self.file_event_batch_timer.timeout.connect(self._flush_file_events_batch)
+
         self.init_ui()
 
         # Load and refresh deleted files from persistent storage
@@ -2132,129 +2142,133 @@ class BeautifulRecoveryApp(QMainWindow):
 
             filtered_recs.append(r)
 
-        self.deleted_table.setRowCount(0)
-        for r in filtered_recs:
-            row = self.deleted_table.rowCount()
-            self.deleted_table.insertRow(row)
+        self.deleted_table.setUpdatesEnabled(False)
+        try:
+            self.deleted_table.setRowCount(0)
+            for r in filtered_recs:
+                row = self.deleted_table.rowCount()
+                self.deleted_table.insertRow(row)
 
-            # Col 0: Checkbox
-            cb_container = QWidget()
-            cb_layout = QHBoxLayout(cb_container)
-            cb_layout.setContentsMargins(6, 0, 6, 0)
-            cb_layout.setAlignment(Qt.AlignCenter)
-            cb = QCheckBox()
-            cb.setProperty("event_id", r.event_id)
-            can_restore = r.status in ("Backup Available", "Backup Verified", "Awaiting Manual Restoration", "Original Location Occupied")
-            cb.setEnabled(can_restore)
-            cb_layout.addWidget(cb)
-            self.deleted_table.setCellWidget(row, 0, cb_container)
+                # Col 0: Checkbox
+                cb_container = QWidget()
+                cb_layout = QHBoxLayout(cb_container)
+                cb_layout.setContentsMargins(6, 0, 6, 0)
+                cb_layout.setAlignment(Qt.AlignCenter)
+                cb = QCheckBox()
+                cb.setProperty("event_id", r.event_id)
+                can_restore = r.status in ("Backup Available", "Backup Verified", "Awaiting Manual Restoration", "Original Location Occupied")
+                cb.setEnabled(can_restore)
+                cb_layout.addWidget(cb)
+                self.deleted_table.setCellWidget(row, 0, cb_container)
 
-            # Col 1: Filename
-            fn_item = QTableWidgetItem(r.filename)
-            fn_item.setFont(QFont("Segoe UI", 9, QFont.Bold))
-            fn_item.setForeground(QBrush(QColor("#f8fafc")))
-            self.deleted_table.setItem(row, 1, fn_item)
+                # Col 1: Filename
+                fn_item = QTableWidgetItem(r.filename)
+                fn_item.setFont(QFont("Segoe UI", 9, QFont.Bold))
+                fn_item.setForeground(QBrush(QColor("#f8fafc")))
+                self.deleted_table.setItem(row, 1, fn_item)
 
-            # Col 2: Original Location
-            loc_item = QTableWidgetItem(r.original_path)
-            loc_item.setForeground(QBrush(QColor("#94a3b8")))
-            self.deleted_table.setItem(row, 2, loc_item)
+                # Col 2: Original Location
+                loc_item = QTableWidgetItem(r.original_path)
+                loc_item.setForeground(QBrush(QColor("#94a3b8")))
+                self.deleted_table.setItem(row, 2, loc_item)
 
-            # Col 3: Drive
-            drv_item = QTableWidgetItem(r.source_drive)
-            drv_item.setForeground(QBrush(QColor("#38bdf8")))
-            drv_item.setTextAlignment(Qt.AlignCenter)
-            self.deleted_table.setItem(row, 3, drv_item)
+                # Col 3: Drive
+                drv_item = QTableWidgetItem(r.source_drive)
+                drv_item.setForeground(QBrush(QColor("#38bdf8")))
+                drv_item.setTextAlignment(Qt.AlignCenter)
+                self.deleted_table.setItem(row, 3, drv_item)
 
-            # Col 4: Size
-            sz_item = QTableWidgetItem(r.size_formatted)
-            sz_item.setForeground(QBrush(QColor("#cbd5e1")))
-            sz_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            self.deleted_table.setItem(row, 4, sz_item)
+                # Col 4: Size
+                sz_item = QTableWidgetItem(r.size_formatted)
+                sz_item.setForeground(QBrush(QColor("#cbd5e1")))
+                sz_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                self.deleted_table.setItem(row, 4, sz_item)
 
-            # Col 5: Deleted At
-            del_item = QTableWidgetItem(r.deletion_timestamp)
-            del_item.setForeground(QBrush(QColor("#94a3b8")))
-            del_item.setTextAlignment(Qt.AlignCenter)
-            self.deleted_table.setItem(row, 5, del_item)
+                # Col 5: Deleted At
+                del_item = QTableWidgetItem(r.deletion_timestamp)
+                del_item.setForeground(QBrush(QColor("#94a3b8")))
+                del_item.setTextAlignment(Qt.AlignCenter)
+                self.deleted_table.setItem(row, 5, del_item)
 
-            # Col 6: Backup Status Badge
-            st_item = QTableWidgetItem(r.status)
-            st_item.setTextAlignment(Qt.AlignCenter)
-            if r.status in ("Backup Available", "Backup Verified"):
-                st_item.setForeground(QBrush(QColor("#34d399")))
-                st_item.setText(f"✓ {r.status}")
-            elif r.status == "Restored":
-                st_item.setForeground(QBrush(QColor("#38bdf8")))
-                st_item.setText("✓ Restored")
-            elif r.status == "Original Location Occupied":
-                st_item.setForeground(QBrush(QColor("#f59e0b")))
-                st_item.setText("⚠️ Location Occupied")
-            elif r.status in ("Recovery Unavailable", "Backup Corrupted"):
-                st_item.setForeground(QBrush(QColor("#ef4444")))
-                st_item.setText(f"✕ {r.status}")
-            else:
-                st_item.setForeground(QBrush(QColor("#fbbf24")))
-                st_item.setText(f"⏳ {r.status}")
-            self.deleted_table.setItem(row, 6, st_item)
+                # Col 6: Backup Status Badge
+                st_item = QTableWidgetItem(r.status)
+                st_item.setTextAlignment(Qt.AlignCenter)
+                if r.status in ("Backup Available", "Backup Verified"):
+                    st_item.setForeground(QBrush(QColor("#34d399")))
+                    st_item.setText(f"✓ {r.status}")
+                elif r.status == "Restored":
+                    st_item.setForeground(QBrush(QColor("#38bdf8")))
+                    st_item.setText("✓ Restored")
+                elif r.status == "Original Location Occupied":
+                    st_item.setForeground(QBrush(QColor("#f59e0b")))
+                    st_item.setText("⚠️ Location Occupied")
+                elif r.status in ("Recovery Unavailable", "Backup Corrupted"):
+                    st_item.setForeground(QBrush(QColor("#ef4444")))
+                    st_item.setText(f"✕ {r.status}")
+                else:
+                    st_item.setForeground(QBrush(QColor("#fbbf24")))
+                    st_item.setText(f"⏳ {r.status}")
+                self.deleted_table.setItem(row, 6, st_item)
 
-            # Col 7: Action Button
-            btn_container = QWidget()
-            btn_layout = QHBoxLayout(btn_container)
-            btn_layout.setContentsMargins(4, 2, 4, 2)
-            btn_layout.setAlignment(Qt.AlignCenter)
+                # Col 7: Action Button
+                btn_container = QWidget()
+                btn_layout = QHBoxLayout(btn_container)
+                btn_layout.setContentsMargins(4, 2, 4, 2)
+                btn_layout.setAlignment(Qt.AlignCenter)
 
-            if r.status == "Restored":
-                act_btn = QPushButton("✓ Restored")
-                act_btn.setEnabled(False)
-                act_btn.setStyleSheet("""
-                    QPushButton {
-                        background-color: #064e3b;
-                        color: #34d399;
-                        font-size: 10px;
-                        font-weight: bold;
-                        border-radius: 4px;
-                        padding: 3px 8px;
-                        border: 1px solid #059669;
-                    }
-                """)
-            elif r.status in ("Recovery Unavailable", "Backup Corrupted"):
-                act_btn = QPushButton("🔬 Scan Disk")
-                act_btn.setStyleSheet("""
-                    QPushButton {
-                        background-color: #1e293b;
-                        color: #94a3b8;
-                        font-size: 10px;
-                        border-radius: 4px;
-                        padding: 3px 8px;
-                        border: 1px solid #334155;
-                    }
-                    QPushButton:hover {
-                        color: #ffffff;
-                        background-color: #334155;
-                    }
-                """)
-                act_btn.clicked.connect(lambda _, p=r.original_path: self.on_scan_disk_for_file(p))
-            else:
-                act_btn = QPushButton("⚡ Restore")
-                act_btn.setStyleSheet("""
-                    QPushButton {
-                        background-color: #0369a1;
-                        color: #ffffff;
-                        font-size: 10px;
-                        font-weight: bold;
-                        border-radius: 4px;
-                        padding: 3px 10px;
-                        border: 1px solid #38bdf8;
-                    }
-                    QPushButton:hover {
-                        background-color: #0284c7;
-                    }
-                """)
-                act_btn.clicked.connect(lambda _, eid=r.event_id: self.restore_single_deleted_file(eid))
+                if r.status == "Restored":
+                    act_btn = QPushButton("✓ Restored")
+                    act_btn.setEnabled(False)
+                    act_btn.setStyleSheet("""
+                        QPushButton {
+                            background-color: #064e3b;
+                            color: #34d399;
+                            font-size: 10px;
+                            font-weight: bold;
+                            border-radius: 4px;
+                            padding: 3px 8px;
+                            border: 1px solid #059669;
+                        }
+                    """)
+                elif r.status in ("Recovery Unavailable", "Backup Corrupted"):
+                    act_btn = QPushButton("🔬 Scan Disk")
+                    act_btn.setStyleSheet("""
+                        QPushButton {
+                            background-color: #1e293b;
+                            color: #94a3b8;
+                            font-size: 10px;
+                            border-radius: 4px;
+                            padding: 3px 8px;
+                            border: 1px solid #334155;
+                        }
+                        QPushButton:hover {
+                            color: #ffffff;
+                            background-color: #334155;
+                        }
+                    """)
+                    act_btn.clicked.connect(lambda _, p=r.original_path: self.on_scan_disk_for_file(p))
+                else:
+                    act_btn = QPushButton("⚡ Restore")
+                    act_btn.setStyleSheet("""
+                        QPushButton {
+                            background-color: #0369a1;
+                            color: #ffffff;
+                            font-size: 10px;
+                            font-weight: bold;
+                            border-radius: 4px;
+                            padding: 3px 10px;
+                            border: 1px solid #38bdf8;
+                        }
+                        QPushButton:hover {
+                            background-color: #0284c7;
+                        }
+                    """)
+                    act_btn.clicked.connect(lambda _, eid=r.event_id: self.restore_single_deleted_file(eid))
 
-            btn_layout.addWidget(act_btn)
-            self.deleted_table.setCellWidget(row, 7, btn_container)
+                btn_layout.addWidget(act_btn)
+                self.deleted_table.setCellWidget(row, 7, btn_container)
+        finally:
+            self.deleted_table.setUpdatesEnabled(True)
 
         if hasattr(self, "del_count_summary_lbl"):
             self.del_count_summary_lbl.setText(f"Showing {len(filtered_recs)} of {len(all_recs)} deleted files")
@@ -2898,99 +2912,118 @@ class BeautifulRecoveryApp(QMainWindow):
         self.files_count_lbl.setText(f"{stats.get('files_protected', 0):,} files protected in Shadow Vault ({stats.get('vault_size_mb', 0):.1f} MB)")
 
     def on_drives_updated(self, devices: list):
-        self.drives_table.setRowCount(len(devices))
-        for row, dev in enumerate(devices):
-            letter = dev.get("drive_letter", "")
-            vol_name = dev.get("volume_name", "")
-            dtype = dev.get("drive_type_desc", "")
-            fs = dev.get("filesystem", "")
-            tot_gb = dev.get("total_gb", 0)
-            fr_gb = dev.get("free_gb", 0)
-            pct = dev.get("used_percentage", 0)
-            cap_str = f"{fr_gb:.1f} GB free / {tot_gb:.1f} GB ({pct}% used)"
-            st = dev.get("status", "ready")
+        self.drives_table.setUpdatesEnabled(False)
+        try:
+            self.drives_table.setRowCount(len(devices))
+            for row, dev in enumerate(devices):
+                letter = dev.get("drive_letter", "")
+                vol_name = dev.get("volume_name", "")
+                dtype = dev.get("drive_type_desc", "")
+                fs = dev.get("filesystem", "")
+                tot_gb = dev.get("total_gb", 0)
+                fr_gb = dev.get("free_gb", 0)
+                pct = dev.get("used_percentage", 0)
+                cap_str = f"{fr_gb:.1f} GB free / {tot_gb:.1f} GB ({pct}% used)"
+                st = dev.get("status", "ready")
 
-            # Col 0: Drive Letter
-            c0 = QTableWidgetItem(f"💾 {letter} ({vol_name})")
-            c0.setForeground(QBrush(QColor("#38bdf8")))
-            c0.setFont(QFont("Segoe UI", 10, QFont.Bold))
+                # Col 0: Drive Letter
+                c0 = QTableWidgetItem(f"💾 {letter} ({vol_name})")
+                c0.setForeground(QBrush(QColor("#38bdf8")))
+                c0.setFont(QFont("Segoe UI", 10, QFont.Bold))
 
-            # Col 1: Type
-            c1 = QTableWidgetItem(dtype)
-            c1.setForeground(QBrush(QColor("#e2e8f0")))
+                # Col 1: Type
+                c1 = QTableWidgetItem(dtype)
+                c1.setForeground(QBrush(QColor("#e2e8f0")))
 
-            # Col 2: Filesystem
-            c2 = QTableWidgetItem(fs)
-            c2.setForeground(QBrush(QColor("#94a3b8")))
+                # Col 2: Filesystem
+                c2 = QTableWidgetItem(fs)
+                c2.setForeground(QBrush(QColor("#94a3b8")))
 
-            # Col 3: Capacity
-            c3 = QTableWidgetItem(cap_str)
-            c3.setForeground(QBrush(QColor("#cbd5e1")))
+                # Col 3: Capacity
+                c3 = QTableWidgetItem(cap_str)
+                c3.setForeground(QBrush(QColor("#cbd5e1")))
 
-            # Col 4: Status
-            if st == "monitoring":
-                st_text = "🟢 Active"
-                st_color = "#34d399"
-            elif st == "paused":
-                st_text = "🟡 Paused"
-                st_color = "#f59e0b"
-            else:
-                st_text = "⚪ Disconnected"
-                st_color = "#94a3b8"
+                # Col 4: Status
+                if st == "monitoring":
+                    st_text = "🟢 Active"
+                    st_color = "#34d399"
+                elif st == "paused":
+                    st_text = "🟡 Paused"
+                    st_color = "#f59e0b"
+                else:
+                    st_text = "⚪ Disconnected"
+                    st_color = "#94a3b8"
 
-            c4 = QTableWidgetItem(st_text)
-            c4.setForeground(QBrush(QColor(st_color)))
-            c4.setTextAlignment(Qt.AlignCenter)
+                c4 = QTableWidgetItem(st_text)
+                c4.setForeground(QBrush(QColor(st_color)))
+                c4.setTextAlignment(Qt.AlignCenter)
 
-            # Col 5: Action Button
-            btn = QPushButton("⏸️ Pause" if st == "monitoring" else "▶️ Start")
-            btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #1e293b;
-                    border: 1px solid #334155;
-                    border-radius: 6px;
-                    padding: 3px 8px;
-                    font-size: 11px;
-                    color: #e2e8f0;
-                }
-                QPushButton:hover {
-                    background-color: #38bdf8;
-                    color: #0f172a;
-                    font-weight: 700;
-                }
-            """)
-            btn.clicked.connect(lambda _, drv=letter: self.toggle_drive(drv))
+                # Col 5: Action Button
+                btn = QPushButton("⏸️ Pause" if st == "monitoring" else "▶️ Start")
+                btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #1e293b;
+                        border: 1px solid #334155;
+                        border-radius: 6px;
+                        padding: 3px 8px;
+                        font-size: 11px;
+                        color: #e2e8f0;
+                    }
+                    QPushButton:hover {
+                        background-color: #38bdf8;
+                        color: #0f172a;
+                        font-weight: 700;
+                    }
+                """)
+                btn.clicked.connect(lambda _, drv=letter: self.toggle_drive(drv))
 
-            self.drives_table.setItem(row, 0, c0)
-            self.drives_table.setItem(row, 1, c1)
-            self.drives_table.setItem(row, 2, c2)
-            self.drives_table.setItem(row, 3, c3)
-            self.drives_table.setItem(row, 4, c4)
-            self.drives_table.setCellWidget(row, 5, btn)
+                self.drives_table.setItem(row, 0, c0)
+                self.drives_table.setItem(row, 1, c1)
+                self.drives_table.setItem(row, 2, c2)
+                self.drives_table.setItem(row, 3, c3)
+                self.drives_table.setItem(row, 4, c4)
+                self.drives_table.setCellWidget(row, 5, btn)
+        finally:
+            self.drives_table.setUpdatesEnabled(True)
 
     def on_file_event(self, evt: dict):
-        ev_type = evt.get("type", "")
-        fn = evt.get("name", "")
-        drv = evt.get("drive", "")
-        if ev_type in ("created", "modified"):
-            row = 0
-            self.files_table.insertRow(row)
-            if self.files_table.rowCount() > 50:
-                self.files_table.removeRow(50)
-            st_item = QTableWidgetItem(f"🛡️ {ev_type.upper()}")
-            st_item.setForeground(QBrush(QColor("#34d399")))
-            n_item = QTableWidgetItem(f"[{drv}] {fn}")
-            n_item.setFont(QFont("Segoe UI", 9, QFont.Bold))
-            t_item = QTableWidgetItem(evt.get("extension", "").upper())
-            s_item = QTableWidgetItem(evt.get("timestamp", ""))
-            act_btn = QPushButton("✓ Vaulted")
-            act_btn.setEnabled(False)
-            act_btn.setStyleSheet("background-color: #162035; color: #38bdf8; font-size: 10px; border: none; padding: 2px;")
-            self.files_table.setItem(row, 0, st_item)
-            self.files_table.setItem(row, 1, n_item)
-            self.files_table.setItem(row, 2, t_item)
-            self.files_table.setItem(row, 3, s_item)
-            self.files_table.setCellWidget(row, 4, act_btn)
+        """Buffers file events and flushes to the UI at a throttled rate to prevent main thread freezing."""
+        self.pending_file_events.append(evt)
+        if not self.file_event_batch_timer.isActive():
+            self.file_event_batch_timer.start(150)
+
+    def _flush_file_events_batch(self):
+        if not self.pending_file_events:
+            return
+        batch = list(self.pending_file_events)[-20:]
+        self.pending_file_events.clear()
+
+        self.files_table.setUpdatesEnabled(False)
+        try:
+            for evt in batch:
+                ev_type = evt.get("type", "")
+                fn = evt.get("name", "")
+                drv = evt.get("drive", "")
+                if ev_type in ("created", "modified"):
+                    self.files_table.insertRow(0)
+                    if self.files_table.rowCount() > 50:
+                        self.files_table.removeRow(50)
+                    st_item = QTableWidgetItem(f"🛡️ {ev_type.upper()}")
+                    st_item.setForeground(QBrush(QColor("#34d399")))
+                    n_item = QTableWidgetItem(f"[{drv}] {fn}")
+                    n_item.setFont(QFont("Segoe UI", 9, QFont.Bold))
+                    t_item = QTableWidgetItem(evt.get("extension", "").upper())
+                    s_item = QTableWidgetItem(evt.get("timestamp", ""))
+                    act_btn = QPushButton("✓ Vaulted")
+                    act_btn.setEnabled(False)
+                    act_btn.setStyleSheet("background-color: #162035; color: #38bdf8; font-size: 10px; border: none; padding: 2px;")
+                    self.files_table.setItem(0, 0, st_item)
+                    self.files_table.setItem(0, 1, n_item)
+                    self.files_table.setItem(0, 2, t_item)
+                    self.files_table.setItem(0, 3, s_item)
+                    self.files_table.setCellWidget(0, 4, act_btn)
+        finally:
+            self.files_table.setUpdatesEnabled(True)
 
     # ── DELETION & RECOVERY EVENTS ───────────────────────────────────────────
     def on_deletion_detected(self, del_info: dict):
