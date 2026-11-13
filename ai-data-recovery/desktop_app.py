@@ -1461,10 +1461,19 @@ class SilentToastNotification(QFrame):
         self.dismiss()
 
     def dismiss(self):
-        self.timer.stop()
-        self.closed.emit()
-        self.hide()
-        self.deleteLater()
+        try:
+            self.timer.stop()
+        except Exception:
+            pass
+        try:
+            self.closed.emit()
+        except Exception:
+            pass
+        try:
+            self.hide()
+            self.deleteLater()
+        except Exception:
+            pass
 
 
 class BeautifulRecoveryApp(QMainWindow):
@@ -1481,6 +1490,7 @@ class BeautifulRecoveryApp(QMainWindow):
         self.last_deleted_info: Optional[dict] = None
         self.pending_deletions: List[dict] = []
         self.last_deleted_batch: List[dict] = []
+        self._active_toast: Optional[SilentToastNotification] = None
         self.worker: Optional[BeautifulRecoveryWorker] = None
         self.sentinel_thread: Optional[SentinelThread] = None
         self.analysis_thread: Optional[FolderAnalysisThread] = None
@@ -2437,15 +2447,23 @@ class BeautifulRecoveryApp(QMainWindow):
             if hasattr(self, "file_path_input") and path:
                 self.file_path_input.setText(path)
 
+    def _clear_active_toast(self):
+        """Safely cleans up reference to destroyed or dismissed toast."""
+        self._active_toast = None
+
     def show_deletion_toast(self, filename: str, location: str, count: int = 1):
         """Displays a small, non-blocking toast in the bottom-right corner."""
-        if hasattr(self, "_active_toast") and self._active_toast:
+        if getattr(self, "_active_toast", None) is not None:
             try:
                 self._active_toast.dismiss()
-            except Exception:
+            except (RuntimeError, Exception):
                 pass
+            self._active_toast = None
+
         toast = SilentToastNotification(self, filename, location, count)
         toast.view_requested.connect(self.navigate_to_deleted_files)
+        toast.closed.connect(self._clear_active_toast)
+        toast.destroyed.connect(self._clear_active_toast)
         toast.adjustSize()
         margin_x = 24
         margin_y = 36
@@ -2464,12 +2482,19 @@ class BeautifulRecoveryApp(QMainWindow):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
-        if hasattr(self, "_active_toast") and self._active_toast and self._active_toast.isVisible():
-            margin_x = 24
-            margin_y = 36
-            x = max(10, self.width() - self._active_toast.width() - margin_x)
-            y = max(10, self.height() - self._active_toast.height() - margin_y)
-            self._active_toast.move(x, y)
+        toast = getattr(self, "_active_toast", None)
+        if toast is not None:
+            try:
+                if toast.isVisible():
+                    margin_x = 24
+                    margin_y = 36
+                    x = max(10, self.width() - toast.width() - margin_x)
+                    y = max(10, self.height() - toast.height() - margin_y)
+                    toast.move(x, y)
+                else:
+                    self._active_toast = None
+            except (RuntimeError, Exception):
+                self._active_toast = None
 
     # ═════════════════════════════════════════════════════════════════════════
     # STAGE 2: DAMAGED FILE & SECTOR CARVING REPAIR ENGINE
