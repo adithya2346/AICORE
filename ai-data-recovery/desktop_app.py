@@ -522,8 +522,10 @@ class SentinelThread(QThread):
         self.target_filename = target_filename
         self.auto_recover = auto_recover
         self.sentinel: Optional[AutoRecoverySentinel] = None
+        self._stopped = False
 
     def run(self):
+        self._stopped = False
         self.sentinel = AutoRecoverySentinel(
             directory=self.directory,
             target_filename=self.target_filename,
@@ -531,13 +533,15 @@ class SentinelThread(QThread):
             on_deletion=lambda del_info: self.deletion_detected.emit(del_info),
             on_recovery=lambda rec_info: self.file_recovered.emit(rec_info),
             on_log=lambda msg: self.log_emitted.emit(msg),
-            poll_interval=0.35
+            poll_interval=1.0
         )
         self.sentinel.start()
-        while self.sentinel and self.sentinel.is_active():
-            self.msleep(150)
+        # Zero-CPU kernel wait: thread stays dormant until woken by OS kernel or stopped
+        while not self._stopped and self.sentinel and self.sentinel.is_active():
+            self.sentinel.wait_until_stopped(timeout=1.0)
 
     def stop(self):
+        self._stopped = True
         if self.sentinel:
             self.sentinel.stop()
 
@@ -1893,55 +1897,59 @@ class BeautifulRecoveryApp(QMainWindow):
         self.files_count_lbl.setText(f"{tot_files} files ({tot_mb} MB) protected")
 
         files = data.get("files", [])
-        self.files_table.setRowCount(len(files))
-        for row, f in enumerate(files):
-            # Col 0: Status
-            status_item = QTableWidgetItem("🛡️ Monitored")
-            status_item.setForeground(QBrush(QColor("#34d399")))
-            status_item.setTextAlignment(Qt.AlignCenter)
+        self.files_table.setUpdatesEnabled(False)
+        try:
+            self.files_table.setRowCount(len(files))
+            for row, f in enumerate(files):
+                # Col 0: Status
+                status_item = QTableWidgetItem("🛡️ Monitored")
+                status_item.setForeground(QBrush(QColor("#34d399")))
+                status_item.setTextAlignment(Qt.AlignCenter)
 
-            # Col 1: Name
-            name_item = QTableWidgetItem(f.get("name", ""))
-            name_item.setForeground(QBrush(QColor("#ffffff")))
-            name_item.setFont(QFont("Segoe UI", 10, QFont.Bold))
+                # Col 1: Name
+                name_item = QTableWidgetItem(f.get("name", ""))
+                name_item.setForeground(QBrush(QColor("#ffffff")))
+                name_item.setFont(QFont("Segoe UI", 10, QFont.Bold))
 
-            # Col 2: Type
-            ext = f.get("extension", "").upper() or "FILE"
-            type_item = QTableWidgetItem(ext)
-            type_item.setForeground(QBrush(QColor("#38bdf8")))
+                # Col 2: Type
+                ext = f.get("extension", "").upper() or "FILE"
+                type_item = QTableWidgetItem(ext)
+                type_item.setForeground(QBrush(QColor("#38bdf8")))
 
-            # Col 3: Size
-            sz = f.get("size", 0)
-            sz_str = f"{sz / 1024:.1f} KB" if sz < 1024 * 1024 else f"{sz / (1024 * 1024):.1f} MB"
-            size_item = QTableWidgetItem(sz_str)
-            size_item.setForeground(QBrush(QColor("#94a3b8")))
-            size_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                # Col 3: Size
+                sz = f.get("size", 0)
+                sz_str = f"{sz / 1024:.1f} KB" if sz < 1024 * 1024 else f"{sz / (1024 * 1024):.1f} MB"
+                size_item = QTableWidgetItem(sz_str)
+                size_item.setForeground(QBrush(QColor("#94a3b8")))
+                size_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
 
-            # Col 4: Action Button
-            btn = QPushButton("⚡ Recover")
-            btn.setStyleSheet("""
-                QPushButton {
-                    background-color: #162035;
-                    border: 1px solid #273754;
-                    border-radius: 6px;
-                    padding: 3px 8px;
-                    font-size: 11px;
-                }
-                QPushButton:hover {
-                    background-color: #059669;
-                    border-color: #34d399;
-                    color: white;
-                }
-            """)
-            fn = f.get("name", "")
-            d = data.get("directory", "")
-            btn.clicked.connect(lambda _, filename=fn, directory=d: self.recover_file_to_same_path(filename, directory))
+                # Col 4: Action Button
+                btn = QPushButton("⚡ Recover")
+                btn.setStyleSheet("""
+                    QPushButton {
+                        background-color: #162035;
+                        border: 1px solid #273754;
+                        border-radius: 6px;
+                        padding: 3px 8px;
+                        font-size: 11px;
+                    }
+                    QPushButton:hover {
+                        background-color: #059669;
+                        border-color: #34d399;
+                        color: white;
+                    }
+                """)
+                fn = f.get("name", "")
+                d = data.get("directory", "")
+                btn.clicked.connect(lambda _, filename=fn, directory=d: self.recover_file_to_same_path(filename, directory))
 
-            self.files_table.setItem(row, 0, status_item)
-            self.files_table.setItem(row, 1, name_item)
-            self.files_table.setItem(row, 2, type_item)
-            self.files_table.setItem(row, 3, size_item)
-            self.files_table.setCellWidget(row, 4, btn)
+                self.files_table.setItem(row, 0, status_item)
+                self.files_table.setItem(row, 1, name_item)
+                self.files_table.setItem(row, 2, type_item)
+                self.files_table.setItem(row, 3, size_item)
+                self.files_table.setCellWidget(row, 4, btn)
+        finally:
+            self.files_table.setUpdatesEnabled(True)
 
     def on_analysis_error(self, err: str):
         self.rescan_btn.setEnabled(True)
